@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!--
+	Project-level UnrealBuildTool configuration.
+
+	Why UBA is off here:
+	  On this machine UBA (Unreal Build Accelerator) fails its file-replacement step:
+	      UbaSessionServer - SetFileInformationByHandle (FileDispositionInfo) failed ... (Access is denied.)
+	  The shared PCH therefore never lands on disk, and every compile after it dies with
+	      fatal error C1083: cannot open precompiled header file ...: permission denied
+
+	  Setting it here fixes every entry point at once - Build.bat, Visual Studio builds,
+	  RunUAT/BuildCookRun, and Schola's `project` simulator (which invokes UBT itself and
+	  offers no way to pass -NoUBA from the command line).
+
+	  Measured on this machine: editor target builds in ~78 s clean / ~9 s incremental with
+	  UBA disabled, versus a hard failure with it enabled.
+
+	  Element names matter - UBT rejects unknown ones. `bUseUBA` is NOT valid; UBT reports
+	  it as an invalid child element and lists the real names. `bAllowUBAExecutor` is the
+	  one that matters here. `bAllowUBALocalExecutor` also exists but is deprecated as of
+	  5.7, so it is deliberately not set.
+
+	  If a future engine or driver update fixes the underlying access issue, flip this back
+	  to true and re-measure - UBA is a genuine build-time win when it works.
+-->
+<Configuration xmlns="https://www.unrealengine.com/BuildConfiguration">
+	<BuildConfiguration>
+		<bAllowUBAExecutor>false</bAllowUBAExecutor>
+	</BuildConfiguration>
+</Configuration>

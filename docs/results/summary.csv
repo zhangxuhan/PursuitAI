@@ -1,0 +1,5 @@
+stage,phase,policy_origin,total_timesteps,eval_map,formal_episodes,caught,timeout,catch_rate_pct,mean_steps_ue_99,mean_end_distance_cm_ue_99,source_json
+Moving025,before,static-task PPO checkpoint,61440,/Game/Maps/L_PursuitCharMoving025,100,55,45,55,3314.55,251.26,moving025_before.json
+Moving025,after,Moving025 PPO continuation +51200 steps,112640,/Game/Maps/L_PursuitCharMoving025,100,100,0,100,875.16,119.98,moving025_after.json
+Moving050,before,Moving025 PPO checkpoint zero-shot,112640,/Game/Maps/L_PursuitCharMoving050,100,84,16,84,2136.68,132.44,moving050_before.json
+Moving050,selected_after,Moving050 PPO continuation selected replica,132880,/Game/Maps/L_PursuitCharMoving050,100,98,2,98,1312.69,121.72,moving050_selected.json

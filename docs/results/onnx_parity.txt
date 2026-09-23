@@ -1,0 +1,27 @@
+================================================================================================================
+PORTFOLIO - THE EXPORTED ONNX vs THE SB3 CHECKPOINT, ON THE SAME OBSERVATIONS
+================================================================================================================
+checkpoint        : checkpoints\stage2e_default_rep3\ppo_final.zip
+  sha256          : 0dbcfe74b3c37926ce454216ca7534b2b8432531a09856467a27cea829893562
+onnx              : checkpoints\rep3_sb3_exact.onnx
+  sha256          : fda71bf800b44da166b449f3074f8c1ac3b8f168ebe20b004c85b1c84e58d979
+observations      : 3148 available from logs\stage4a\rep3_lowwall_zero_shot_ue.log
+  matrix sha256   : 324319259f8fb535e1632eab3bf95a4fd8108c69e7ffafa98985e68a72392e0f
+  episodes        : 1..100
+  rows compared   : 400 (strided across the whole matrix)
+
+SB3 deterministic : model.predict(deterministic=True) on TargetSensor, shape (400, 3)
+ONNX inputs  : TargetSensor['batch_size', 15]
+ONNX outputs : CharMoveInput['batch_size', 2], JumpInput['batch_size', 1]
+  CharMoveInput  -> (400, 2)
+  JumpInput      -> (400, 1)
+
+--- agreement (3D action: CharMoveInput x2 then JumpInput) ---
+  max |onnx - sb3|      : 1.192e-07   (per-dimension: 1.19e-07, 1.19e-07, 5.96e-08)
+  mean |onnx - sb3|     : 7.977e-09
+  elements > 1e-05      : 0 / 1200
+  move_x  sb3 range [+0.0000, +1.0000] sd=0.1964 onnx range [+0.0000, +1.0000]
+  move_y  sb3 range [+0.0000, +1.0000] sd=0.2812 onnx range [+0.0000, +1.0000]
+  jump    sb3 range [-0.6387, +0.2111] sd=0.1094 onnx range [-0.6387, +0.2111]
+
+VERDICT_onnx_matches_sb3_deterministic=YES

@@ -1,0 +1,61 @@
+# ---- Unreal Engine 标准忽略 ----
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+Build/
+.vs/
+*.VC.db
+*.opensdf
+*.sdf
+*.sln
+*.suo
+*.xcodeproj
+*.xcworkspace
+*.code-workspace
+
+# ---- 外部插件（按 tag 固定，见 Plugins/README.md）----
+Plugins/Schola/
+
+# ---- Python / 训练产物 ----
+.venv/
+__pycache__/
+*.pyc
+checkpoints/
+logs/
+datasets/
+wandb/
+*.onnx
+*.pt
+*.pth
+*.pb
+*.ckpt
+
+# ---- Fab 资产（许可禁止再分发，仅本地保留）----
+Content/Cartoon_City_Free/
+Content/RPGHeroSquad/
+
+# ---- 第三方参考仓库克隆（公开可再取得，不复制入库）----
+refs/
+
+# ---- 本地探针 / 临时输出 ----
+_procs*.txt
+Content/Maps/_probe_*
+tools/_probe_*
+tools/_test_*
+
+# ---- 录像 / 压缩包 ----
+*.mp4
+*.zip
+
+# ---- 杂项 ----
+*.log
+Thumbs.db
+desktop.ini
+
+# ---- agent 交接文档（不上传）----
+docs/HANDOFF.md
+docs/CHAR_V2_HANDOFF.md
+
+# ---- agent 本地记忆（不上传）----
+.workbuddy/memory/

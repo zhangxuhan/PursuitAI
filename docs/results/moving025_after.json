@@ -1,0 +1,161 @@
+{
+  "n_episodes_python": 101,
+  "n_episodes_ue_present": 100,
+  "formal_window": "episode 2..101",
+  "formal_total": 100,
+  "warmup_episodes": [
+    1
+  ],
+  "warmup_caught": 1,
+  "warmup_total": 1,
+  "reward_threshold": 9.7513,
+  "caught_formal": 100,
+  "timeout_formal": 0,
+  "catch_rate_formal": 1.0,
+  "catch_rate_formal_pct": 100.0,
+  "classification_mismatches_vs_ue": [],
+  "ue_present_in_formal": 99,
+  "ue_missing_in_formal": [
+    101
+  ],
+  "behavior": {
+    "start_d": {
+      "n": 99,
+      "mean": 215.15,
+      "median": 221.0,
+      "p90": 244.0,
+      "min": 151.0,
+      "max": 250.0
+    },
+    "end_d": {
+      "n": 99,
+      "mean": 119.98,
+      "median": 120.0,
+      "p90": 120.0,
+      "min": 119.0,
+      "max": 120.0
+    },
+    "closest_d": {
+      "n": 99,
+      "mean": 119.98,
+      "median": 120.0,
+      "p90": 120.0,
+      "min": 119.0,
+      "max": 120.0
+    },
+    "steps_sampled": {
+      "n": 99,
+      "mean": 875.16,
+      "median": 741.0,
+      "p90": 1568.2,
+      "min": 264.0,
+      "max": 2011.0
+    },
+    "dot_vel_target": {
+      "n": 99,
+      "mean": 0.59,
+      "median": 0.55,
+      "p90": 0.94,
+      "min": 0.19,
+      "max": 0.99
+    },
+    "grounded_fraction": {
+      "n": 99,
+      "mean": 1.0,
+      "median": 1.0,
+      "p90": 1.0,
+      "min": 1.0,
+      "max": 1.0
+    },
+    "mean_speed_cm_s": {
+      "n": 99,
+      "mean": 474.61,
+      "median": 475.0,
+      "p90": 533.0,
+      "min": 309.0,
+      "max": 559.0
+    },
+    "jumps_total": 0,
+    "jumps_per_episode": {
+      "n": 99,
+      "mean": 0.0,
+      "median": 0.0,
+      "p90": 0.0,
+      "min": 0.0,
+      "max": 0.0
+    },
+    "wall_hits_counted_total": 327,
+    "wall_hits_counted_per_episode": {
+      "n": 99,
+      "mean": 3.3,
+      "median": 0.0,
+      "p90": 0.0,
+      "min": 0.0,
+      "max": 282.0
+    }
+  },
+  "evader": {
+    "disp_cm": {
+      "n": 99,
+      "mean": 113.22,
+      "median": 94.0,
+      "p90": 208.0,
+      "min": 35.0,
+      "max": 280.0
+    },
+    "path_cm": {
+      "n": 99,
+      "mean": 124.94,
+      "median": 109.0,
+      "p90": 225.2,
+      "min": 35.0,
+      "max": 292.0
+    },
+    "mean_speed_cm_s": {
+      "n": 99,
+      "mean": 145.21,
+      "median": 146.0,
+      "p90": 148.0,
+      "min": 137.0,
+      "max": 149.0
+    },
+    "max_speed_cm_s": {
+      "n": 99,
+      "mean": 150.0,
+      "median": 150.0,
+      "p90": 150.0,
+      "min": 150.0,
+      "max": 150.0
+    },
+    "moved_episodes": 99,
+    "moved_fraction": 1.0,
+    "ratios_baked": [
+      0.25
+    ],
+    "static_flags": [
+      "no"
+    ]
+  },
+  "interface_spaces": {
+    "obs_dims": 15,
+    "action_dims": 3
+  },
+  "obs_dims_seen": [
+    15
+  ],
+  "obs_contract_violations": [],
+  "wall_class_breakdown": {
+    "counted": 5,
+    "ignored_floor": 3,
+    "ignored_target": 1
+  },
+  "error_scan": {
+    "NaN": 0,
+    "Inf": 0,
+    "space_mismatch": 0,
+    "gRPC_error": 0,
+    "gRPC": 0
+  },
+  "gate": "PASS",
+  "train_triggered": false
+}
