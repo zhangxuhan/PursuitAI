@@ -70,5 +70,3 @@ py -3.12 -m venv .venv
 `tools/run_training_char_curriculum.sh` は移動目標マップへの**継続学習**用で、入力 checkpoint、実行タグ、許可リスト内のマップを必須にしています。関係するコードは `Source/PursuitAI/`、マップ生成は `tools/gen_char_curriculum_level.py`、評価解析は `tools/stage0_measure.py` と `tools/stage2b_eval_analyze.py` です。
 
 同梱の ONNX を試す場合は `UE_ENGINE_ROOT` に UE 5.7 のインストール先を設定し、`tools/run_demo_circle.ps1 -View Arena` または `-View Follow` を実行します。展示マップは開始距離 450–600 cm、目標速度 0.50×です。固定シード `20260923` の別途 20 回の確認では 19 回捕獲、1 回時間切れでした。上表の Moving050 正式評価とは別の数値です。[ONNX 対照記録](docs/results/onnx_parity.txt)では実観測 400 件に対する SB3 の決定論的行動との最大誤差が `1.192e-7` でした。既存の `tools/export_policy.bat` が加える Tanh はこの checkpoint には合わないため、そのまま再出力しないでください。
-
-任意マップの自動学習、複数エージェントの同時学習、世界モデル、習得済みのジャンプは成果として主張しません。
