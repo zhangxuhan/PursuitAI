@@ -233,6 +233,139 @@ void APursuitCharEnv::BeginPlay()
 			Stage4WallHeightCm);
 	}
 
+	// Stage 5D diagnostic clear-shift override. Stage4ClearShiftCm positions the interior wall
+	// on X for the no_jump group; the course bakes -400 (see gen_char_curriculum_level.py). The
+	// hypothesis under test is that moving the wall out of the 800 cm probe range (-400 -> -900)
+	// restores rep3's Moving050-trained chase. This is the ONLY knob that changes it; it is
+	// bounds-gated so a stray or out-of-range value is ignored and the baked level value stands.
+	// When the flag is ABSENT the member keeps its deserialized (level) value, so DEFAULT
+	// BEHAVIOUR IS UNCHANGED and no shipped level is affected. It is NOT a delivery mechanism:
+	// it exists only to run the control (-400, no flag) and the -900 experiment on the SAME binary.
+	double ParsedClearShift = 0.0;
+	if (FParse::Value(Cmdline, TEXT("PursuitClearShift="), ParsedClearShift) && ParsedClearShift >= -2000.0 && ParsedClearShift <= 2000.0)
+	{
+		Stage4ClearShiftCm = static_cast<float>(ParsedClearShift);
+		bPursuitClearShiftOverridden = true;
+		UE_LOG(LogPursuitAI, Log,
+			TEXT("PursuitCharEnv: -PursuitClearShift=%.0f overrides the baked clear shift (default unchanged unless flag passed)"),
+			Stage4ClearShiftCm);
+	}
+	// Stage 5F diagnostic: per-episode wall X jitter override (cm). Bounds-gated 0..300; only the
+	// explicit flag changes the baked value (0 pins the wall to the env origin). Used by Task 1 to
+	// keep the fixed-spawn comparison's wall at a known X. Default behaviour unchanged unless passed.
+	double ParsedJitter = 0.0;
+	if (FParse::Value(Cmdline, TEXT("PursuitWallJitter="), ParsedJitter) && ParsedJitter >= 0.0 && ParsedJitter <= 300.0)
+	{
+		Stage4WallJitterCm = static_cast<float>(ParsedJitter);
+		UE_LOG(LogPursuitAI, Log,
+			TEXT("PursuitCharEnv: -PursuitWallJitter=%.0f overrides the baked wall jitter (default unchanged unless flag passed)"),
+			Stage4WallJitterCm);
+	}
+
+	// Stage 5E diagnostic: disable the interior wall entirely (no actor, no collision, no probe discs).
+	// Default behaviour unchanged unless the flag is passed.
+	if (FParse::Param(Cmdline, TEXT("PursuitDisableWall")))
+	{
+		bPursuitDisableWall = true;
+		UE_LOG(LogPursuitAI, Log,
+			TEXT("PursuitCharEnv: -PursuitDisableWall requested - the Stage 4 interior wall will NOT be spawned (diagnostic only, not a delivered level)"));
+	}
+	// Stage 5F diagnostic: force the independent course fork (same effect as a level that bakes
+	// bPursuitCourseFork=true). When on, the no_jump group spawns wall-free with no clear-shift
+	// avoidance disc while must_jump keeps the 70 cm wall. Default behaviour unchanged unless passed.
+	if (FParse::Param(Cmdline, TEXT("PursuitCourseFork")))
+	{
+		bPursuitCourseFork = true;
+		UE_LOG(LogPursuitAI, Log,
+			TEXT("PursuitCharEnv: -PursuitCourseFork requested - no_jump group will spawn wall-free (diagnostic only, not a delivered level)"));
+	}
+	// Stage 5E diagnostic: fixed spawn separation override (cm). Bounds-gated 100..2000; only the
+	// explicit flag changes the baked value. Disclosed via sep_override= in the layout log.
+	double ParsedSep = 0.0;
+	if (FParse::Value(Cmdline, TEXT("PursuitSeparation="), ParsedSep) && ParsedSep >= 100.0 && ParsedSep <= 2000.0)
+	{
+		Stage4SpawnSeparationCm = static_cast<float>(ParsedSep);
+		bPursuitSeparationOverridden = true;
+		UE_LOG(LogPursuitAI, Log,
+			TEXT("PursuitCharEnv: -PursuitSeparation=%.0f overrides the baked spawn separation (default unchanged unless flag passed)"),
+			Stage4SpawnSeparationCm);
+	}
+	// Stage 5E diagnostic: episode time-limit override (seconds). Bounds-gated 1..30. Default unchanged unless passed.
+	double ParsedEpSec = 0.0;
+	if (FParse::Value(Cmdline, TEXT("PursuitEpisodeSeconds="), ParsedEpSec) && ParsedEpSec >= 1.0 && ParsedEpSec <= 30.0)
+	{
+		EpisodeSeconds = static_cast<float>(ParsedEpSec);
+		bPursuitEpisodeSecondsOverridden = true;
+		UE_LOG(LogPursuitAI, Log,
+			TEXT("PursuitCharEnv: -PursuitEpisodeSeconds=%.1f overrides EpisodeSeconds (default unchanged unless flag passed)"),
+			EpisodeSeconds);
+	}
+	// Stage 5E diagnostic: evader speed-ratio override. Bounds-gated 0.10..1.50. Default unchanged unless passed.
+	double ParsedEvRatio = 0.0;
+	if (FParse::Value(Cmdline, TEXT("PursuitEvaderSpeedRatio="), ParsedEvRatio) && ParsedEvRatio >= 0.10 && ParsedEvRatio <= 1.50)
+	{
+		EvaderSpeedRatio = static_cast<float>(ParsedEvRatio);
+		bPursuitEvaderRatioOverridden = true;
+		UE_LOG(LogPursuitAI, Log,
+			TEXT("PursuitCharEnv: -PursuitEvaderSpeedRatio=%.2f overrides EvaderSpeedRatio (default unchanged unless flag passed)"),
+			EvaderSpeedRatio);
+	}
+	// Stage 5E diagnostic: obs/action trajectory dump for the first N episodes (0 = off). Bounds-gated 0..20.
+	int32 ParsedDump = 0;
+	if (FParse::Value(Cmdline, TEXT("PursuitDumpObs="), ParsedDump) && ParsedDump >= 0 && ParsedDump <= 20)
+	{
+		PursuitDumpObsEpisodes = ParsedDump;
+		if (ParsedDump > 0)
+		{
+			UE_LOG(LogPursuitAI, Log,
+				TEXT("PursuitCharEnv: -PursuitDumpObs=%d - the first %d episodes will log (obs,action,xy) pairs to the abslog (diagnostic only)"),
+				ParsedDump, ParsedDump);
+		}
+	}
+	// Stage 5F Task 1 diagnostic: explicit fixed spawn coordinates "cx,cy,ex,ey" (cm). Bounds-checked
+	// to the arena; only the explicit flag changes spawn. Used for the honest single-variable wall
+	// comparison (identical spawn in both wall configs). Default off (parity placement stands).
+	{
+		FString FixedSpawnStr;
+		if (FParse::Value(Cmdline, TEXT("PursuitFixedSpawn="), FixedSpawnStr, false) && !FixedSpawnStr.IsEmpty())
+		{
+			TArray<FString> Parts;
+			if (FixedSpawnStr.ParseIntoArray(Parts, TEXT(","), true) == 4)
+			{
+				bool bOk = true;
+				float V[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+				for (int32 i = 0; i < 4; ++i)
+				{
+					V[i] = FCString::Atof(*Parts[i]);
+					if (!FMath::IsFinite(V[i]) || FMath::Abs(V[i]) > ArenaRadius)
+					{
+						bOk = false;
+						break;
+					}
+				}
+				if (bOk)
+				{
+					bPursuitFixedSpawn = true;
+					PursuitFixedChaser = FVector2D(V[0], V[1]);
+					PursuitFixedEvader = FVector2D(V[2], V[3]);
+					UE_LOG(LogPursuitAI, Log,
+						TEXT("PursuitCharEnv: -PursuitFixedSpawn=(%.0f,%.0f),(%.0f,%.0f) overrides the parity placement (default unchanged unless flag passed)"),
+						V[0], V[1], V[2], V[3]);
+				}
+				else
+				{
+					UE_LOG(LogPursuitAI, Warning,
+						TEXT("PursuitCharEnv: -PursuitFixedSpawn ignored - a value is non-finite or |coord| > ArenaRadius=%.0f"), ArenaRadius);
+				}
+			}
+			else
+			{
+				UE_LOG(LogPursuitAI, Warning,
+					TEXT("PursuitCharEnv: -PursuitFixedSpawn ignored - expected 4 comma-separated cm values (cx,cy,ex,ey)"));
+			}
+		}
+	}
+
 	// Pane label, same convention as v1: FParse::Value would stop at a comma, so pass
 	// "false" to keep commas and join words with underscores (spaces end the value).
 	FString ParsedLabelText;
@@ -474,7 +607,7 @@ void APursuitCharEnv::BeginPlay()
 	// Stage 4A's single low wall - same place, same reason: after the rig, so the floor it
 	// stands on exists and so the boundary ring is already in the world when its
 	// spawn-avoidance discs are registered (the wall overlaps the ring by design).
-	if (bStage4WallLayout)
+	if (bStage4WallLayout && !bPursuitDisableWall)
 	{
 		BuildStage4Wall();
 	}
@@ -1263,6 +1396,12 @@ void APursuitCharEnv::SetEnvironmentOptions_Implementation(const TMap<FString, F
 	ApplyFloat(TEXT("WallHitPenalty"), WallHitPenalty);
 	ApplyFloat(TEXT("AirbornePenalty"), AirbornePenalty);
 	ApplyFloat(TEXT("JumpActionPenalty"), JumpActionPenalty);
+	// Stage 5C single variable. Default 0.0 keeps every pre-5C level scoring exactly as before.
+	ApplyFloat(TEXT("Stage4CrossBonus"), Stage4CrossBonus);
+	// Stage 5J variant V. Both default so that every pre-5J level keeps scoring exactly as
+	// it does today (bonus 0.0 = off), for the same reason the 5C default is load-bearing.
+	ApplyFloat(TEXT("Stage4NearWallLaunchBonus"), Stage4NearWallLaunchBonus);
+	ApplyFloat(TEXT("Stage4NearWallLaunchWindowCm"), Stage4NearWallLaunchWindowCm);
 	ApplyFloat(TEXT("ProximityBonus"), ProximityBonus);
 	ApplyFloat(TEXT("ProximityRadiusCm"), ProximityRadiusCm);
 	ApplyFloat(TEXT("TimeoutPenalty"), TimeoutPenalty);
@@ -1277,6 +1416,13 @@ void APursuitCharEnv::BeginEpisode()
 {
 	CurrentStep = 0;
 	EpisodeSimTime = 0.0f;
+	// Stage 5K: decisions align with episodes. Without the reset the first decision of an
+	// episode could be up to DecisionInterval-1 updates late, which would make step counts
+	// depend on where the previous episode happened to end.
+	Stage5KFramePhase = 0;
+	Stage5KHeldDeltaSeconds = 0.0f;
+	Stage5KHeldSecondsTotal = 0.0f;
+	Stage5KUpdateCountThisEpisode = 0;
 	TotalReward = 0.0f;
 	CurrentReward = 0.0f;
 	bCaught = false;
@@ -1436,15 +1582,28 @@ void APursuitCharEnv::BeginEpisode()
 	if (bStage4WallLayout)
 	{
 		UE_LOG(LogPursuitAI, Log,
-			TEXT("PursuitCharEnv: episode %d STAGE4 layout=%s wall_x=%.0f height=%.0f thickness=%.0f length=%.0f chaser=(%.0f, %.0f) evader=(%.0f, %.0f) chaser_yaw=%.1f separation=%.0f clear_shift=%.0f jump_gate=%s"),
+			TEXT("PursuitCharEnv: episode %d STAGE4 layout=%s wall_x=%.0f height=%.0f thickness=%.0f length=%.0f chaser=(%.0f, %.0f) evader=(%.0f, %.0f) chaser_yaw=%.1f separation=%.0f clear_shift=%.0f jump_gate=%s level=%s clear_override=%s wall_disabled=%s wall_actual=%s fork=%s sep=%.0f sep_override=%s ep_seconds=%.1f evader_ratio=%.2f"),
 			EpisodeIndex,
 			bStage4BlockedLayout ? TEXT("must_jump") : TEXT("no_jump"),
-			GetActorLocation().X,
+			// Stage 5B: the wall COMPONENT's X, not the env origin. With jitter 0 (every
+			// legacy level) the two are identical, so existing parsers see the same value;
+			// with jitter this is the plane the crossing test and the probes actually use.
+			Stage4Wall ? Stage4Wall->GetComponentLocation().X : GetActorLocation().X,
 			Stage4WallHeightCm, Stage4WallThicknessCm, Stage4WallLengthCm,
 			ChaserLocation.X, ChaserLocation.Y, EvaderLocation.X, EvaderLocation.Y,
 			ChaserAgent ? ChaserAgent->GetActorRotation().Yaw : 0.0f,
-			Stage4SpawnSeparationCm, Stage4ClearShiftCm,
-			bEnableAgentJump ? TEXT("on") : TEXT("off"));
+			// Stage 5B: separation actually in force (== Stage4SpawnSeparationCm when jitter is 0).
+			Stage4SeparationThisEpisodeCm, Stage4ClearShiftCm,
+			bEnableAgentJump ? TEXT("on") : TEXT("off"),
+			GetWorld() ? *GetWorld()->GetMapName() : TEXT("?"),
+			bPursuitClearShiftOverridden ? TEXT("on") : TEXT("off"),
+			bPursuitDisableWall ? TEXT("on") : TEXT("off"),
+			bStage4WallActiveThisEpisode ? TEXT("on") : TEXT("off"),
+			bPursuitCourseFork ? TEXT("on") : TEXT("off"),
+			Stage4SeparationThisEpisodeCm,
+			bPursuitSeparationOverridden ? TEXT("on") : TEXT("off"),
+			EpisodeSeconds,
+			EvaderSpeedRatio);
 
 		// Stage 4B jump-cost audit. LOGGING ONLY - no coefficient, branch or gate below is
 		// read from this line, and it changes no behaviour any other stage can see.
@@ -1469,6 +1628,41 @@ void APursuitCharEnv::BeginEpisode()
 			JumpActionPenalty, AirbornePenalty,
 			(JumpActionPenalty != 0.0f && bEnableAgentJump) ? TEXT("ACTIVE") : TEXT("off"),
 			(AirbornePenalty != 0.0f) ? TEXT("ACTIVE") : TEXT("off"));
+
+		// Stage 5C: the coefficient in force, printed by the RUNNING PROCESS on every
+		// episode - the same discipline the JUMPCOST line established for the two penalties.
+		// Stage 4C's failure mode was a coefficient that could not be evidenced from the
+		// run's own log; a bonus whose value is only known from the source asset would
+		// repeat exactly that. This is the line the provenance guard matches on.
+		UE_LOG(LogPursuitAI, Log,
+			TEXT("PursuitCharEnv: episode %d STAGE4 CROSSBONUS Stage4CrossBonus=%.3f group_gate=%s pay_gate=%s wall_actual=%s"),
+			EpisodeIndex, Stage4CrossBonus,
+			bStage4BlockedLayout ? TEXT("must_jump") : TEXT("no_jump"),
+			(Stage4CrossBonus != 0.0f && bStage4BlockedLayout && bEnableAgentJump && bStage4WallLayout)
+				? TEXT("ACTIVE") : TEXT("off"),
+			bStage4WallActiveThisEpisode ? TEXT("on") : TEXT("off"));
+		// Stage 5J variant V: same discipline as the CROSSBONUS line above - printed by the
+		// RUNNING PROCESS every episode, so a bonus whose value is only knowable from the
+		// source asset cannot happen again. double_payment_risk is the explicit answer to
+		// "did both triggers carry money at once?": Stage 5J's level sets the cross bonus
+		// to 0 and the launch bonus to 2.0, so this must read 'no' in every single episode.
+		UE_LOG(LogPursuitAI, Log,
+			TEXT("PursuitCharEnv: episode %d STAGE4 LAUNCHBONUS Stage4NearWallLaunchBonus=%.3f window_cm=%.0f Stage4CrossBonus=%.3f group_gate=%s pay_gate=%s double_payment_risk=%s wall_actual=%s"),
+			EpisodeIndex, Stage4NearWallLaunchBonus, Stage4NearWallLaunchWindowCm, Stage4CrossBonus,
+			bStage4BlockedLayout ? TEXT("must_jump") : TEXT("no_jump"),
+			(Stage4NearWallLaunchBonus != 0.0f && bStage4BlockedLayout && bEnableAgentJump && bStage4WallLayout)
+				? TEXT("ACTIVE") : TEXT("off"),
+			(Stage4NearWallLaunchBonus != 0.0f && Stage4CrossBonus != 0.0f) ? TEXT("BOTH_NONZERO") : TEXT("no"),
+			bStage4WallActiveThisEpisode ? TEXT("on") : TEXT("off"));
+		// Stage 5K: the cadence in force, printed by the RUNNING PROCESS on every episode -
+		// the same discipline the CROSSBONUS / LAUNCHBONUS lines established. A level can
+		// only set DecisionInterval through the asset and the trainer can overwrite it after
+		// the map loads, so the number that decides how often the policy is asked has to be
+		// readable from the log and not only from the .umap.
+		UE_LOG(LogPursuitAI, Log,
+			TEXT("PursuitCharEnv: episode %d STAGE5K CADENCE interval=%d held_action_reapplied=%s evader_advanced_on_skipped=%s sim_time_banked=%s episode_seconds=%.3f"),
+			EpisodeIndex, DecisionInterval,
+			TEXT("yes"), TEXT("yes"), TEXT("yes"), EpisodeSeconds);
 	}
 
 	// Velocity history was already cleared before the teleport (see above). Do NOT
@@ -1963,6 +2157,12 @@ void APursuitCharEnv::Reset_Implementation(FInitialAgentState& OutAgentState)
 
 void APursuitCharEnv::Step_Implementation(const FInstancedStruct& InAction, FAgentState& OutAgentState)
 {
+	// Stage 5K: remember the action so the updates this decision holds it for can re-apply
+	// it (AdvanceHeldAction). Captured first, before anything below can consume the struct,
+	// so the held action is exactly the one the policy chose.
+	Stage5KHeldAction = InAction;
+	bStage5KHasHeldAction = true;
+
 	// Wall hits from the movement this action is about to cause are attributed to the
 	// NEXT step's reward (movement integrates after this call returns), so the flag
 	// carries over rather than being cleared here - it is cleared on the step that reads
@@ -2055,6 +2255,61 @@ void APursuitCharEnv::Step_Implementation(const FInstancedStruct& InAction, FAge
 		}
 	}
 
+	// Stage 5E diagnostic OBSDUMP: log the exact (obs -> action) pair the policy saw, plus the
+	// chaser/evader XY, for the first PursuitDumpObsEpisodes episodes only. The obs is the sensor's
+	// most recent collection - the one that produced THIS action - so each line is a faithful
+	// (observation, action) sample. Gated by -PursuitDumpObs= (0 = off); writes to the same -abslog
+	// the per-episode lines use, so it carries the level= / param provenance. Never read for behaviour.
+	if (PursuitDumpObsEpisodes > 0 && EpisodeIndex < PursuitDumpObsEpisodes)
+	{
+		UPursuitTargetSensor* DumpSensor = ChaserAgent ? ChaserAgent->FindComponentByClass<UPursuitTargetSensor>() : nullptr;
+		if (DumpSensor && DumpSensor->LastObsValues.Num() >= 15)
+		{
+			float AX = 0.0f, AY = 0.0f, AJ = 0.0f;
+			if (const FBoxPoint* FA = InAction.GetPtr<FBoxPoint>())
+			{
+				if (FA->Values.Num() >= 3) { AX = FA->Values[0]; AY = FA->Values[1]; AJ = FA->Values[2]; }
+			}
+			else if (const FDictPoint* AD = InAction.GetPtr<FDictPoint>())
+			{
+				const TInstancedStruct<FPoint>* MI = AD->Points.Find(TEXT("CharMoveInput"));
+				const TInstancedStruct<FPoint>* JI = AD->Points.Find(TEXT("JumpInput"));
+				if (MI) { const FBoxPoint* M = MI->GetPtr<FBoxPoint>(); if (M && M->Values.Num() >= 2) { AX = M->Values[0]; AY = M->Values[1]; } }
+				if (JI) { const FBoxPoint* J = JI->GetPtr<FBoxPoint>(); if (J && J->Values.Num() >= 1) { AJ = J->Values[0]; } }
+			}
+			FString ObsTxt;
+			for (int32 D = 0; D < DumpSensor->LastObsValues.Num(); ++D)
+			{
+				ObsTxt += FString::Printf(TEXT(" %.3f"), DumpSensor->LastObsValues[D]);
+			}
+			const FVector CP = ChaserAgent ? ChaserAgent->GetActorLocation() : FVector::ZeroVector;
+			const FVector EP = EvaderAgent ? EvaderAgent->GetActorLocation() : FVector::ZeroVector;
+			UE_LOG(LogPursuitAI, Log,
+				TEXT("PursuitCharEnv: OBSDUMP ep=%d step=%d obs=%s act=%.3f,%.3f,%.3f chaser=(%.0f,%.0f) evader=(%.0f,%.0f)"),
+				EpisodeIndex, CurrentStep, *ObsTxt, AX, AY, AJ, CP.X, CP.Y, EP.X, EP.Y);
+		}
+	}
+
+	// Stage 5F: per-round obstacle reading at spawn (the first step's 15D capture, taken before any
+	// action executes this step). Prints the five RANGE bearings (d5..d9) and five CLEARANCE bearings
+	// (d10..d14) so the acceptance log proves, per round, whether the interior wall produced any probe
+	// reading. must_jump (wall present) shows a low forward RANGE; no_jump fork (wall disabled) reads
+	// all 1.0 / 0.5 (flat ground, no wall contact or probe). This is the "障碍读数" the brief requires.
+	if (CurrentStep == 1 && ChaserAgent)
+	{
+		UPursuitTargetSensor* ObsSensor = ChaserAgent->FindComponentByClass<UPursuitTargetSensor>();
+		if (ObsSensor && ObsSensor->LastObsValues.Num() >= 15)
+		{
+			const TArray<float>& O = ObsSensor->LastObsValues;
+			UE_LOG(LogPursuitAI, Log,
+				TEXT("PursuitCharEnv: STAGE4 OBSTACLE ep=%d group=%s wall_actual=%s range[%.2f,%.2f,%.2f,%.2f,%.2f] clearance[%.2f,%.2f,%.2f,%.2f,%.2f]"),
+				EpisodeIndex,
+				bStage4BlockedLayout ? TEXT("must_jump") : TEXT("no_jump"),
+				bStage4WallActiveThisEpisode ? TEXT("on") : TEXT("off"),
+				O[5], O[6], O[7], O[8], O[9], O[10], O[11], O[12], O[13], O[14]);
+		}
+	}
+
 	if (ChaserAgent)
 	{
 		IAgent::Execute_Act(ChaserAgent, InAction);
@@ -2075,24 +2330,64 @@ void APursuitCharEnv::Step_Implementation(const FInstancedStruct& InAction, FAge
 
 	const bool bNewCatch = NewDistance <= CatchRadius && DeltaZ <= CatchHeightTolerance;
 
+	// Stage 5B event chain: the catch step is known here, BEFORE the observation for this
+	// step is captured (line below) - so the catch step's own 15D reading gets dumped, and
+	// LogEpisodeValidationSummary emits the event line afterwards.
+	if (bNewCatch)
+	{
+		Stage5CatchStep = CurrentStep;
+		Stage5EventThisStep = true;
+		// Stage 5J: the terminal event gets its own token so the five states this stage
+		// reports stay distinguishable in ONE grep of the abslog:
+		//   jump_request       - the POLICY asked for a jump (intent)
+		//   launched           - the actuator actually fired (execution)
+		//   launch_bonus_paid  - V paid for it (reward)   [STAGE5LAUNCHBONUS line]
+		//   wall_cross_over    - the feet cleared the wall (result)
+		//   caught             - the chase ended in a catch (terminal)
+		// "Paid for a launch" is NOT "crossed the wall" is NOT "caught the target", and
+		// keeping them on separate tokens is what stops this round from claiming success.
+		UE_LOG(LogPursuitAI, Log,
+			TEXT("PursuitCharEnv: STAGE5EVENT episode=%d step=%d group=%s event=caught"),
+			EpisodeIndex, CurrentStep,
+			bStage4BlockedLayout ? TEXT("must_jump") : TEXT("no_jump"));
+	}
+
 	// Time wall in simulated seconds (see EpisodeSeconds comment): step counts are NOT
 	// a duration for dt-driven movement. NOTE: MaxSteps is deliberately NOT a timeout
 	// here - at the trainer's ~430 fps a 2000-step cap fires at 4.6 sim-seconds, long
 	// before the time wall, and re-creates the "catch unreachable" trap it was meant to
 	// guard against (measured: the v2 retrain still timed out at exactly 2000 steps).
-	const float Dt = GetWorld() ? GetWorld()->GetDeltaSeconds() : (1.0f / 60.0f);
+	// Stage 5K: Dt is the simulated time this DECISION covers, not the time of the single
+	// update it happened to be taken on. With DecisionInterval = N it is the N-1 skipped
+	// updates' banked time plus this update's own delta. Without this the EpisodeSeconds
+	// wall would stretch by a factor of N (an episode would last N times longer in
+	// simulated time) and every Dt-scaled penalty would quietly become N times weaker per
+	// simulated second - both of which would look exactly like "training got better".
+	const float Dt = (GetWorld() ? GetWorld()->GetDeltaSeconds() : (1.0f / 60.0f))
+		+ Stage5KHeldDeltaSeconds;
+	Stage5KHeldDeltaSeconds = 0.0f;
 	EpisodeSimTime += Dt;
 	const bool bOutOfTime = !bNewCatch && EpisodeSimTime >= EpisodeSeconds;
+
+	// Stage 5C ORDERING, and it is not cosmetic. AccumulateValidationSample is the one hook
+	// that classifies the wall crossing, and ScoreStep is what pays Stage4CrossBonus for it.
+	// Measured AFTER scoring, the crossing would be paid one step LATE: the log would show the
+	// event on step N and the bonus on step N+1, and the claim "the bonus entered the return on
+	// the crossing step" would be unfalsifiable - which is the shape of gap Stage 4C shipped
+	// with. Measuring first makes the event and its payment the same step by construction.
+	// Nothing downstream changes: nothing in this hook reads PrevDistance or CurrentReward, and
+	// OutAgentState.Reward is still filled from the result computed below.
+	AccumulateValidationSample(NewDistance);
 
 	CurrentReward = ScoreStep(NewDistance, bNewCatch, bOutOfTime, bWallHit, Dt);
 	TotalReward += CurrentReward;
 	PrevDistance = NewDistance;
 
-	// Stage 0 metrics, sampled on the same world state the reward was scored against.
-	// Deliberately NOT derived from the reward: "the chaser closed the gap" and "the
-	// chaser is running at the target" are different claims, and a reward curve cannot
-	// tell them apart - which is why the acceptance run is not judged on TensorBoard.
-	AccumulateValidationSample(NewDistance);
+	// Stage 0 metrics note, preserved from the original placement: these are sampled on the
+	// same world state the reward was scored against, and are deliberately NOT derived from
+	// the reward: "the chaser closed the gap" and "the chaser is running at the target" are
+	// different claims, and a reward curve cannot tell them apart - which is why the
+	// acceptance run is not judged on TensorBoard.
 
 	if (ChaserAgent)
 	{
@@ -2179,6 +2474,14 @@ void APursuitCharEnv::Step_Implementation(const FInstancedStruct& InAction, FAge
 		// and 0 is ALSO what a correct counter reports on an empty stage, which is what
 		// made the false negative invisible for a whole round.
 		TallyWallProbes(ResolveTargetSensorPoint(UnTypedObservation));
+		// Stage 5B: full 15D dump on event steps (policy path). ResolveTargetSensorPoint is
+		// a pure unwrap, so calling it twice is safe; keeping the tally call untouched keeps
+		// the existing counter semantics exactly as they were. The event flag is consumed
+		// here - everything that could set it this step (chain events in
+		// AccumulateValidationSample, the catch latch above) ran BEFORE this line, and
+		// LogEpisodeValidationSummary only emits the event LINE, not a dump.
+		LogStage5Observation(ResolveTargetSensorPoint(UnTypedObservation));
+		Stage5EventThisStep = false;
 	}
 
 	OutAgentState.Reward = CurrentReward;
@@ -2199,6 +2502,22 @@ void APursuitCharEnv::Step_Implementation(const FInstancedStruct& InAction, FAge
 		// The Stage 0 line first, and NOT behind the bLogEpisodes gate: it is the
 		// measurement the acceptance report reads, one line per completed episode.
 		LogEpisodeValidationSummary(bNewCatch ? TEXT("CAUGHT") : TEXT("TIMEOUT"), NewDistance);
+		// Stage 5K: the cadence this episode ACTUALLY ran at. Two engine-owned numbers -
+		// decisions taken and simulated seconds accumulated - so there is no frame-rate
+		// assumption in it. updates_per_decision is the receipt for "the action really was
+		// held for N physics updates": with interval=N it must read ~N, and a cadence that
+		// silently stopped banking skipped updates would show up as held_s=0.000.
+		UE_LOG(LogPursuitAI, Log,
+			TEXT("PursuitCharEnv: STAGE5KCADENCE episode=%d group=%s interval=%d decisions=%d updates=%d updates_per_decision=%.2f sim_s=%.3f decisions_per_sim_s=%.1f mean_dt_ms=%.3f held_s=%.3f outcome=%s"),
+			EpisodeIndex,
+			bStage4BlockedLayout ? TEXT("must_jump") : TEXT("no_jump"),
+			DecisionInterval, CurrentStep, Stage5KUpdateCountThisEpisode,
+			CurrentStep > 0 ? (static_cast<float>(Stage5KUpdateCountThisEpisode) / static_cast<float>(CurrentStep)) : 0.0f,
+			EpisodeSimTime,
+			EpisodeSimTime > 0.0f ? (static_cast<float>(CurrentStep) / EpisodeSimTime) : 0.0f,
+			CurrentStep > 0 ? (EpisodeSimTime / static_cast<float>(CurrentStep) * 1000.0f) : 0.0f,
+			Stage5KHeldSecondsTotal,
+			bNewCatch ? TEXT("CAUGHT") : TEXT("TIMEOUT"));
 
 		if (bLogEpisodes)
 		{
@@ -2319,9 +2638,49 @@ float APursuitCharEnv::ScoreStep(float NewDistance, bool bNewCatch, bool bOutOfT
 		}
 	}
 
+	// Stage 5C: the one-shot wall-crossing bonus, paid on the crossing step itself. The
+	// amount was decided in the shared hook that classified the crossing (which ran before
+	// this call - see the ordering note in Step_Implementation), so what lands here is the
+	// SAME event the STAGE5BONUS line just reported, on the SAME step, not a reconstruction
+	// of it one step later. Consumed and zeroed so it cannot be paid twice.
+	const float CrossBonusPaid = Stage5CrossBonusPendingReward;
+	if (CrossBonusPaid != 0.0f)
+	{
+		Reward += CrossBonusPaid;
+		Stage5CrossBonusPendingReward = 0.0f;
+	}
+
+	// Stage 5J variant V: same hand-off discipline as Stage 5C's crossing bonus - DECIDED
+	// in the shared hook that detected the launch (which ran before this call) and PAID
+	// here, on the SAME step, then consumed so it can never be paid twice. That equality
+	// (chain_launch == launch_bonus_step for a paid episode) is the machine-checkable
+	// statement of "the event and its reward are the same thing on the same step".
+	const float LaunchBonusPaid = Stage5LaunchBonusPendingReward;
+	if (LaunchBonusPaid != 0.0f)
+	{
+		Reward += LaunchBonusPaid;
+		Stage5LaunchBonusPendingReward = 0.0f;
+	}
+
 	if (bNewCatch)
 	{
 		Reward += CatchReward;
+	}
+
+	// The payment ledger line. It is emitted on the step that carries a bonus AND on the
+	// step that ends the episode, because "the bonus was decided" and "the bonus reached the
+	// return the trainer differentiated" are separate facts and only the second one is the
+	// reward-shaped claim. crossbonus is this step's bonus contribution (0.0 on non-payment
+	// steps), step_reward is the full per-step return, total_reward is the running episode
+	// total INCLUDING this step, so the three can be checked against each other offline.
+	if (CrossBonusPaid != 0.0f || LaunchBonusPaid != 0.0f || bNewCatch || bOutOfTime)
+	{
+		UE_LOG(LogPursuitAI, Log,
+			TEXT("PursuitCharEnv: STAGE5REWARD episode=%d step=%d group=%s crossbonus=%.3f launchbonus=%.3f step_reward=%.4f total_reward=%.4f catch=%d timeout=%d"),
+			EpisodeIndex, CurrentStep,
+			bStage4BlockedLayout ? TEXT("must_jump") : TEXT("no_jump"),
+			CrossBonusPaid, LaunchBonusPaid, Reward, TotalReward + Reward,
+			bNewCatch ? 1 : 0, bOutOfTime ? 1 : 0);
 	}
 
 	return Reward;
@@ -2350,6 +2709,29 @@ void APursuitCharEnv::Tick(float DeltaSeconds)
 		{
 			MaintainWatchedView(DeltaSeconds);
 		}
+
+		// Stage 5K decision cadence. Super::Tick is what pumps the connector, and the
+		// connector is what asks the policy for an action - so calling it only every
+		// DecisionInterval-th UE update is what makes one action cover that many physics
+		// updates. The updates in between are NOT idle: AdvanceHeldAction re-applies the
+		// action in force and moves the evader, and banks their simulated time so the
+		// EpisodeSeconds wall still measures simulated seconds and not decisions.
+		++Stage5KUpdateCountThisEpisode;
+
+		if (DecisionInterval > 1)
+		{
+			++Stage5KFramePhase;
+			if (Stage5KFramePhase % DecisionInterval != 0)
+			{
+				if (bEpisodeRunning)
+				{
+					AdvanceHeldAction(DeltaSeconds);
+				}
+				return;
+			}
+			Stage5KFramePhase = 0;
+		}
+
 		Super::Tick(DeltaSeconds);
 		return;
 	}
@@ -2612,6 +2994,27 @@ void APursuitCharEnv::RunWatchedEpisode(float DeltaSeconds)
 		}
 	}
 
+	// Stage 5B event chain (watched path): latch the catch before this step's observation
+	// is captured inside AccumulateValidationSample, same ordering as the training path.
+	if (bNewCatch)
+	{
+		Stage5CatchStep = CurrentStep;
+		Stage5EventThisStep = true;
+		// Stage 5J: the terminal event gets its own token so the five states this stage
+		// reports stay distinguishable in ONE grep of the abslog:
+		//   jump_request       - the POLICY asked for a jump (intent)
+		//   launched           - the actuator actually fired (execution)
+		//   launch_bonus_paid  - V paid for it (reward)   [STAGE5LAUNCHBONUS line]
+		//   wall_cross_over    - the feet cleared the wall (result)
+		//   caught             - the chase ended in a catch (terminal)
+		// "Paid for a launch" is NOT "crossed the wall" is NOT "caught the target", and
+		// keeping them on separate tokens is what stops this round from claiming success.
+		UE_LOG(LogPursuitAI, Log,
+			TEXT("PursuitCharEnv: STAGE5EVENT episode=%d step=%d group=%s event=caught"),
+			EpisodeIndex, CurrentStep,
+			bStage4BlockedLayout ? TEXT("must_jump") : TEXT("no_jump"));
+	}
+
 	// Same simulated-seconds wall as training (Step_Implementation): episode duration
 	// must not depend on the frame rate in watched runs either. Watched mode owns its
 	// own accumulation because it never goes through Step_Implementation. MaxSteps is
@@ -2650,6 +3053,28 @@ void APursuitCharEnv::RunWatchedEpisode(float DeltaSeconds)
 		bEpisodeRunning = false;
 		NoteEpisodeCompleted(bNewCatch);
 	}
+}
+
+void APursuitCharEnv::AdvanceHeldAction(float DeltaSeconds)
+{
+	// A skipped update still advances the world, so everything that drives the world has to
+	// run on it. Both calls below are the same two Step_Implementation makes on a decision
+	// update, in the same order (chaser acts, then the evader flees), so a skipped update
+	// is not a different simulation - it is the same simulation with the previous decision
+	// still in force. Ordering matters for a second reason: AddMovementInput is consumed by
+	// the movement component later in this same frame, so the input has to be (re)applied
+	// here, on this update, or the chaser coasts for the updates this decision owns.
+	if (ChaserAgent && bStage5KHasHeldAction)
+	{
+		IAgent::Execute_Act(ChaserAgent, Stage5KHeldAction);
+	}
+	AdvanceScriptedDrivers(0.0f);
+
+	// Banked, not discarded: the next decision's Dt is this bank plus its own update
+	// delta, which is what keeps the per-simulated-second reward rates and the
+	// EpisodeSeconds wall honest at any cadence.
+	Stage5KHeldDeltaSeconds += DeltaSeconds;
+	Stage5KHeldSecondsTotal += DeltaSeconds;
 }
 
 void APursuitCharEnv::AdvanceScriptedDrivers(float DeltaSeconds)
@@ -3122,6 +3547,10 @@ void APursuitCharEnv::BuildStage4Wall()
 	// "half-diagonal plus one capsule radius" rule the Stage 3 pillar and the greybox table use.
 	const float DiscRadius = FMath::Sqrt(2.0f) * Thickness * 0.5f + 34.0f;
 	const int32 DiscCount = FMath::Max(2, FMath::CeilToInt(Length / (2.0f * DiscRadius)) + 1);
+	// Stage 5B: remember which disc entries the wall owns. The per-episode wall X offset
+	// (Stage4WallJitterCm) moves the wall, so these entries must move with it or the spawn
+	// avoidance would keep clearing a corridor where the wall USED to be.
+	Stage4WallDiscFirst = RigObstacleDiscs.Num();
 	for (int32 Index = 0; Index < DiscCount; ++Index)
 	{
 		const float T = (DiscCount > 1)
@@ -3132,6 +3561,7 @@ void APursuitCharEnv::BuildStage4Wall()
 		Disc.ClearRadius = DiscRadius;
 		RigObstacleDiscs.Add(Disc);
 	}
+	Stage4WallDiscLast = RigObstacleDiscs.Num() - 1;
 
 	// --- the acceptance measurement itself -------------------------------------------
 	// Everything above is geometry. This block is why Stage 4A exists: read the walk and jump
@@ -3212,43 +3642,245 @@ void APursuitCharEnv::PlaceStage4SpawnPair(FVector2D& OutChaserPoint, FVector2D&
 	// wall rather than to two subtly different tasks.
 	bStage4BlockedLayout = (EpisodeIndex % 2 == 0);
 
-	const float Half = FMath::Max(Stage4SpawnSeparationCm, 200.0f) * 0.5f;
-	const float Shift = bStage4BlockedLayout ? 0.0f : Stage4ClearShiftCm;
+	// Stage 5F course fork: decide whether the interior wall is actually present/colliding this
+	// episode. must_jump  -> wall always present. no_jump -> wall present ONLY if NOT the fork
+	// (the legacy course keeps its shifted wall); in the fork the no_jump group has no wall and
+	// no clear-shift avoidance disc. -PursuitDisableWall removes the wall entirely (component null),
+	// so it forces wall_actual=off too. Disclosed via wall_actual= in the layout log below.
+	bStage4WallActiveThisEpisode = !bPursuitDisableWall && (!bPursuitCourseFork || bStage4BlockedLayout);
 
-	OutChaserPoint = FVector2D(-Half + Shift, 0.0f);
-	OutEvaderPoint = FVector2D(+Half + Shift, 0.0f);
+	// --- Stage 5B: per-episode controlled randomisation ----------------------------------
+	//
+	// Driven from the episode-keyed DriveRng (seed + DriveStreamSeedOffset + episode index,
+	// seeded in BeginEpisode BEFORE placement), so the whole layout sequence of a run is
+	// reproducible from the run seed, and the resolved values are logged on the STAGE4 line
+	// below. Both jitter properties default to 0, which reproduces the legacy geometry
+	// bit-for-bit - every level that does not opt in is unchanged.
+	//
+	// The WALL moves, not just the pair: a course that only translated the spawn pair would
+	// teach "the wall is always at x=0", which is exactly the kind of layout constant a city
+	// transfer cannot rely on. The pair is placed RELATIVE to the wall's X, so the
+	// chaser-to-wall and wall-to-evader distances are governed by the separation sample, and
+	// the group definition (opposite vs same side) is unchanged.
+	Stage4WallOffsetThisEpisodeCm = (Stage4WallJitterCm > 0.0f)
+		? DriveRng.FRandRange(-Stage4WallJitterCm, Stage4WallJitterCm)
+		: 0.0f;
+	Stage4SeparationThisEpisodeCm = (Stage4SpawnSepJitterCm > 0.0f)
+		? Stage4SpawnSeparationCm + DriveRng.FRandRange(-Stage4SpawnSepJitterCm, Stage4SpawnSepJitterCm)
+		: Stage4SpawnSeparationCm;
 
-	// Legality, measured rather than assumed. Two DIFFERENT failure modes, so two different
-	// checks: a capsule inside the wall (a spawn the geometry forbids) and a capsule close enough
-	// to the boundary ring that the layout is unwinnable for reasons that have nothing to do with
-	// the wall. Collapsing them into one number would hide which one fired.
+	// Move the wall component and its spawn-avoidance discs to the sampled offset.
+	if (Stage4Wall)
+	{
+		Stage4Wall->SetRelativeLocation(FVector(Stage4WallOffsetThisEpisodeCm, 0.0f, Stage4WallHeightCm * 0.5f));
+	}
+	if (Stage4WallDiscFirst != INDEX_NONE && Stage4WallDiscLast >= Stage4WallDiscFirst)
+	{
+		for (int32 DiscIndex = Stage4WallDiscFirst; DiscIndex <= Stage4WallDiscLast; ++DiscIndex)
+		{
+			// Stage 5F fork: when the wall is inactive this episode, move its spawn-avoidance
+			// discs out of play so they do not constrain a spawn for a wall that is not there.
+			RigObstacleDiscs[DiscIndex].Centre.X = bStage4WallActiveThisEpisode
+				? Stage4WallOffsetThisEpisodeCm : 1.0e6f;
+		}
+	}
+	// Stage 5F fork: enable/disable the wall component itself per episode. Disabling collision
+	// makes the wall invisible to the probe sweep (ECC_WorldStatic) and to the capsule, so a
+	// no_jump fork episode is genuinely wall-free without rebuilding the level.
+	if (Stage4Wall)
+	{
+		Stage4Wall->SetVisibility(bStage4WallActiveThisEpisode);
+		Stage4Wall->SetCollisionEnabled(bStage4WallActiveThisEpisode
+			? ECollisionEnabled::QueryAndPhysics
+			: ECollisionEnabled::NoCollision);
+	}
+
+	const float Half = FMath::Max(Stage4SeparationThisEpisodeCm, 200.0f) * 0.5f;
+
+	// Stage 5F fork: when the wall is inactive this episode the no_jump group gets NO clear-shift
+	// avoidance disc (Shift=0). Otherwise the legacy rule stands: must_jump sits on the wall
+	// (Shift=0, wall between the pair); no_jump translates the pair by Stage4ClearShiftCm.
+	const float Shift = bStage4WallActiveThisEpisode
+		? (bStage4BlockedLayout ? 0.0f : Stage4ClearShiftCm)
+		: 0.0f;
+
+	if (bPursuitFixedSpawn)
+	{
+		// Task 1 honest comparison: identical absolute spawn in BOTH wall configs. The clear-shift
+		// avoidance disc is bypassed entirely, so wall-on and wall-off runs share one spawn state.
+		OutChaserPoint = PursuitFixedChaser;
+		OutEvaderPoint = PursuitFixedEvader;
+	}
+	else
+	{
+		OutChaserPoint = FVector2D(Stage4WallOffsetThisEpisodeCm - Half + Shift, 0.0f);
+		OutEvaderPoint = FVector2D(Stage4WallOffsetThisEpisodeCm + Half + Shift, 0.0f);
+	}
+
+	// Legality, measured rather than assumed - now RELATIVE TO THE WALL'S SAMPLED POSITION,
+	// not to the env origin (the legacy X=0 case makes the two identical). Two DIFFERENT
+	// failure modes, so two different checks: a capsule inside the wall (a spawn the geometry
+	// forbids) and a capsule close enough to the boundary ring that the layout is unwinnable
+	// for reasons that have nothing to do with the wall. Collapsing them into one number would
+	// hide which one fired.
 	const float HalfThickness = FMath::Max(Stage4WallThicknessCm, 20.0f) * 0.5f;
-	const float WallGapChaserCm = FMath::Abs(OutChaserPoint.X) - HalfThickness;
-	const float WallGapEvaderCm = FMath::Abs(OutEvaderPoint.X) - HalfThickness;
+	const float WallGapChaserCm = FMath::Abs(OutChaserPoint.X - Stage4WallOffsetThisEpisodeCm) - HalfThickness;
+	const float WallGapEvaderCm = FMath::Abs(OutEvaderPoint.X - Stage4WallOffsetThisEpisodeCm) - HalfThickness;
 	// "Which side" is what DEFINES the group, so it is derived from the placed points and logged
 	// rather than asserted: a sign error in the shift would otherwise produce two groups that are
 	// secretly the same experiment while both still pass every range check.
-	const bool bOppositeSides = (OutChaserPoint.X > 0.0f) != (OutEvaderPoint.X > 0.0f);
+	const bool bOppositeSides = (OutChaserPoint.X > Stage4WallOffsetThisEpisodeCm) != (OutEvaderPoint.X > Stage4WallOffsetThisEpisodeCm);
 	const float ArenaMarginCm = ArenaRadius - FMath::Max(
 		FVector2D::Distance(OutChaserPoint, FVector2D::ZeroVector),
 		FVector2D::Distance(OutEvaderPoint, FVector2D::ZeroVector));
 
 	UE_LOG(LogPursuitAI, Log,
 		TEXT("PursuitCharEnv: STAGE4 spawn layout=%s chaser=(%.0f, %.0f) evader=(%.0f, %.0f) separation=%.0f ")
+		TEXT("wall_x_offset=%.0f wall_jitter_band=%.0f sep_jitter_band=%.0f ")
 		TEXT("chaser_to_wall_face=%.0f cm (capsule gap %.0f cm) evader_to_wall_face=%.0f cm nearest_wall=%.0f cm opposite_sides=%s straight_line_crosses_wall=%s"),
 		bStage4BlockedLayout ? TEXT("must_jump") : TEXT("no_jump"),
 		OutChaserPoint.X, OutChaserPoint.Y, OutEvaderPoint.X, OutEvaderPoint.Y,
 		FVector2D::Distance(OutChaserPoint, OutEvaderPoint),
+		Stage4WallOffsetThisEpisodeCm, Stage4WallJitterCm, Stage4SpawnSepJitterCm,
 		WallGapChaserCm, WallGapChaserCm - 34.0f, WallGapEvaderCm, ArenaMarginCm,
 		bOppositeSides ? TEXT("yes") : TEXT("no"),
 		(bOppositeSides && bStage4BlockedLayout) ? TEXT("yes") : TEXT("no"));
 
-	if (WallGapChaserCm <= 34.0f || WallGapEvaderCm <= 34.0f || ArenaMarginCm <= 100.0f)
+	if ((bStage4WallActiveThisEpisode && (WallGapChaserCm <= 34.0f || WallGapEvaderCm <= 34.0f)) || ArenaMarginCm <= 100.0f)
 	{
 		UE_LOG(LogPursuitAI, Error,
-			TEXT("PursuitCharEnv: Stage 4 layout %s is not legal - a capsule is inside the wall or within 100 cm of the boundary ring; the only difference between the groups must be which side of the wall the chase happens on"),
-			bStage4BlockedLayout ? TEXT("must_jump") : TEXT("no_jump"));
+			TEXT("PursuitCharEnv: Stage 4 layout %s is not legal - a capsule is inside the wall or within 100 cm of the boundary ring (wall_x_offset=%.0f separation=%.0f wall_actual=%s); the only difference between the groups must be which side of the wall the chase happens on"),
+			bStage4BlockedLayout ? TEXT("must_jump") : TEXT("no_jump"),
+			Stage4WallOffsetThisEpisodeCm, Stage4SeparationThisEpisodeCm,
+			bStage4WallActiveThisEpisode ? TEXT("on") : TEXT("off"));
 	}
+}
+
+void APursuitCharEnv::EvaluateCrossBonusThisStep(float ClearanceCm)
+{
+	// Every gate is evaluated and NAMED, including the ones that pass. A run that paid
+	// nothing must be able to say which gate refused it - "no bonus appeared" is otherwise
+	// indistinguishable from "the bonus was never wired up", which is the first hypothesis
+	// Stage 5C's branch B has to be able to rule out from the log alone.
+	const bool bWallLayout = bStage4WallLayout;
+	const bool bMustJumpGroup = bStage4BlockedLayout;   // C1 group gate
+	const bool bJumpGateOn = bEnableAgentJump;          // C2 jump gate
+	const bool bFirstThisEpisode = !Stage5CrossBonusPaidThisEpisode;  // C4 latch
+	// C3 is satisfied by construction: this is only ever called from the branch that just
+	// classified a crossing as "over" (feet >= wall top at the instant of the plane crossing).
+	const bool bCoefficientActive = Stage4CrossBonus != 0.0f;
+
+	const bool bPay = bWallLayout && bMustJumpGroup && bJumpGateOn && bFirstThisEpisode && bCoefficientActive;
+
+	if (bPay)
+	{
+		Stage5CrossBonusPaidThisEpisode = true;
+		Stage5CrossBonusStep = CurrentStep;
+		Stage5CrossBonusPendingReward = Stage4CrossBonus;
+		Stage5CrossBonusTotalThisEpisode += Stage4CrossBonus;
+	}
+
+	// One line per crossing, paid or not, carrying everything needed to re-derive the
+	// decision offline: group, the gate that refused (or "none"), the coefficient in force
+	// and the clearance the crossing actually had.
+	const TCHAR* RefusedBy =
+		!bWallLayout ? TEXT("no_wall_layout")
+		: !bMustJumpGroup ? TEXT("group_gate_no_jump")
+		: !bJumpGateOn ? TEXT("jump_gate_off")
+		: !bFirstThisEpisode ? TEXT("already_paid_latch")
+		: !bCoefficientActive ? TEXT("coefficient_zero")
+		: TEXT("none");
+
+	UE_LOG(LogPursuitAI, Log,
+		TEXT("PursuitCharEnv: STAGE5BONUS episode=%d step=%d group=%s paid=%d amount=%.3f coefficient=%.3f refused_by=%s clearance=%.0f cross_count=%d episode_total=%.3f"),
+		EpisodeIndex, CurrentStep,
+		bStage4BlockedLayout ? TEXT("must_jump") : TEXT("no_jump"),
+		bPay ? 1 : 0, bPay ? Stage4CrossBonus : 0.0f, Stage4CrossBonus,
+		RefusedBy, ClearanceCm, WallCrossOverCount, Stage5CrossBonusTotalThisEpisode);
+}
+
+float APursuitCharEnv::MeasureForwardObstacleCm() const
+{
+	if (!ChaserAgent)
+	{
+		return -1.0f;
+	}
+
+	const FVector Forward = ChaserAgent->GetActorRotation().Vector().GetSafeNormal2D();
+	if (Forward.IsNearlyZero())
+	{
+		return -1.0f;
+	}
+
+	const UWorld* World = GetWorld();
+	if (!World)
+	{
+		return -1.0f;
+	}
+
+	// Stage 5J: identical geometry to the 0-degree observation probe - 34 cm sphere swept
+	// at capsule-CENTRE height, both actors ignored, same 800 cm range. The V4 window has
+	// to be decidable from the very measurement the policy can see; a window that used a
+	// different trace could fire where the observation says "nothing there" (or refuse
+	// where it does not), which makes the bonus unlearnable rather than merely speculative.
+	constexpr float ForwardProbeRangeCm = 800.0f;
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(PursuitLaunchWindowProbe), false);
+	Params.AddIgnoredActor(ChaserAgent);
+	Params.AddIgnoredActor(EvaderAgent);
+
+	const FVector Start = ChaserAgent->GetActorLocation();
+	const FVector End = Start + Forward * ForwardProbeRangeCm;
+
+	FHitResult Hit;
+	const bool bHit = World->SweepSingleByChannel(Hit, Start, End, FQuat::Identity,
+		ECC_WorldStatic, FCollisionShape::MakeSphere(34.0f), Params);
+
+	return bHit ? Hit.Distance : -1.0f;
+}
+
+void APursuitCharEnv::EvaluateLaunchBonusThisStep(float ForwardObstacleCm, bool bLaunchedFromGround)
+{
+	// Every gate is evaluated and NAMED, including the ones that pass.
+	const bool bWallLayout = bStage4WallLayout;
+	const bool bMustJumpGroup = bStage4BlockedLayout;                              // V1
+	const bool bJumpGateOn = bEnableAgentJump;                                     // V2
+	const bool bFromGround = bLaunchedFromGround;                                  // V3
+	const bool bWithinWindow = ForwardObstacleCm >= 0.0f
+		&& ForwardObstacleCm <= Stage4NearWallLaunchWindowCm;                        // V4
+	const bool bFirstThisEpisode = !Stage5LaunchBonusPaidThisEpisode;              // V5
+	const bool bCoefficientActive = Stage4NearWallLaunchBonus != 0.0f;
+
+	const bool bPay = bWallLayout && bMustJumpGroup && bJumpGateOn && bFromGround
+		&& bWithinWindow && bFirstThisEpisode && bCoefficientActive;
+
+	if (bPay)
+	{
+		Stage5LaunchBonusPaidThisEpisode = true;
+		Stage5LaunchBonusStep = CurrentStep;
+		Stage5LaunchBonusPendingReward = Stage4NearWallLaunchBonus;
+		Stage5LaunchBonusTotalThisEpisode += Stage4NearWallLaunchBonus;
+	}
+
+	const TCHAR* RefusedBy =
+		!bWallLayout ? TEXT("no_wall_layout")
+		: !bMustJumpGroup ? TEXT("group_gate_no_jump")
+		: !bJumpGateOn ? TEXT("jump_gate_off")
+		: !bFromGround ? TEXT("not_launched_from_ground")
+		: !bWithinWindow ? TEXT("outside_window")
+		: !bFirstThisEpisode ? TEXT("already_paid_latch")
+		: !bCoefficientActive ? TEXT("coefficient_zero")
+		: TEXT("none");
+
+	// One line per launch, paid or not, carrying everything needed to re-derive the
+	// decision offline: group, which gate refused (or "none"), the window in force and
+	// the forward distance the launch was actually made at.
+	UE_LOG(LogPursuitAI, Log,
+		TEXT("PursuitCharEnv: STAGE5LAUNCHBONUS episode=%d step=%d group=%s paid=%d amount=%.3f coefficient=%.3f window_cm=%.0f forward_obstacle_cm=%.1f launched_from_ground=%d refused_by=%s launch_count=%d episode_total=%.3f"),
+		EpisodeIndex, CurrentStep,
+		bStage4BlockedLayout ? TEXT("must_jump") : TEXT("no_jump"),
+		bPay ? 1 : 0, bPay ? Stage4NearWallLaunchBonus : 0.0f, Stage4NearWallLaunchBonus,
+		Stage4NearWallLaunchWindowCm, ForwardObstacleCm, bLaunchedFromGround ? 1 : 0,
+		RefusedBy, Stage5LaunchCountThisEpisode, Stage5LaunchBonusTotalThisEpisode);
 }
 
 void APursuitCharEnv::AccumulateStage4Sample(float DistanceCm)
@@ -3262,7 +3894,10 @@ void APursuitCharEnv::AccumulateStage4Sample(float DistanceCm)
 	const bool bGrounded = Movement && Movement->IsMovingOnGround();
 
 	const float FloorZ = GetActorLocation().Z;
-	const float WallX = GetActorLocation().X;
+	// Stage 5B: the wall plane is the wall COMPONENT's current X, not the env origin. With
+	// Stage4WallJitterCm = 0 these are identical (legacy levels unchanged); with jitter the
+	// crossing test must follow the wall or every episode after the first would misclassify.
+	const float WallX = Stage4Wall ? Stage4Wall->GetComponentLocation().X : GetActorLocation().X;
 	const FVector ChaserLocation = ChaserAgent->GetActorLocation();
 	// Named ...Cm rather than plain CapsuleHalfHeight: this translation unit pulls in engine
 	// headers that already declare a global of that name, and UE builds with warnings-as-errors
@@ -3294,6 +3929,13 @@ void APursuitCharEnv::AccumulateStage4Sample(float DistanceCm)
 			return;
 		}
 		bStage4HasBeenGrounded = true;
+		// Stage 5B event chain: the spawn-grounded state is the first key observation state.
+		// Stage5EventThisStep gates the full 15D observation dump in the shared hook.
+		Stage5EventThisStep = true;
+		UE_LOG(LogPursuitAI, Log,
+			TEXT("PursuitCharEnv: STAGE5EVENT episode=%d step=%d group=%s event=spawn_grounded"),
+			EpisodeIndex, CurrentStep,
+			bStage4BlockedLayout ? TEXT("must_jump") : TEXT("no_jump"));
 	}
 
 	// --- jump intent vs execution --------------------------------------------------------
@@ -3304,10 +3946,58 @@ void APursuitCharEnv::AccumulateStage4Sample(float DistanceCm)
 	if (bJumpRequestedThisStep)
 	{
 		++JumpRequestStepsThisEpisode;
+		// Stage 5B event chain (POLICY path only - the scripted oracle drives the actuator
+		// directly and never sets this latch; its chain starts at launch instead). First
+		// request step only: a sustained request would flood the log without adding shape.
+		if (Stage5FirstRequestStep < 0)
+		{
+			Stage5FirstRequestStep = CurrentStep;
+			Stage5EventThisStep = true;
+			UE_LOG(LogPursuitAI, Log,
+				TEXT("PursuitCharEnv: STAGE5EVENT episode=%d step=%d group=%s event=jump_request"),
+				EpisodeIndex, CurrentStep,
+				bStage4BlockedLayout ? TEXT("must_jump") : TEXT("no_jump"));
+		}
 	}
 	const int32 JumpCountNow = ChaserAgent->JumpActuator ? ChaserAgent->JumpActuator->GetJumpCount() : 0;
 	if (JumpCountNow > Stage4PrevJumpCount)
 	{
+		// Stage 5B event chain: every launch is logged (a short course can legitimately
+		// need more than one), with the chain's FIRST launch latched for STAGE4RESULT.
+		Stage5LastLaunchStep = CurrentStep;
+		if (Stage5FirstLaunchStep < 0)
+		{
+			Stage5FirstLaunchStep = CurrentStep;
+		}
+		Stage5EventThisStep = true;
+		UE_LOG(LogPursuitAI, Log,
+			TEXT("PursuitCharEnv: STAGE5EVENT episode=%d step=%d group=%s event=launched"),
+			EpisodeIndex, CurrentStep,
+			bStage4BlockedLayout ? TEXT("must_jump") : TEXT("no_jump"));
+		// --- Stage 5J variant V: the payment point of the jump reward ---------------
+		// Measured HERE, on the launch step, while the actuator has just fired and before
+		// this step's reward is scored. This is the decision V is meant to shape, and it is
+		// the whole difference from Stage 5C: paying on the CROSSING step reaches this step
+		// through 420-650 airborne steps of discount (gamma^420 ~ 0.015) - see Stage 5I.
+		++Stage5LaunchCountThisEpisode;
+		const float ForwardObstacleCm = MeasureForwardObstacleCm();
+		if (Stage5LaunchCountThisEpisode == 1)
+		{
+			Stage5FirstLaunchForwardObstacleCm = ForwardObstacleCm;
+		}
+		// "Launched from the ground": by this point TryJump may ALREADY have flipped the
+		// movement mode to Falling, so this step's IsMovingOnGround is not trustworthy on
+		// its own. Either signal being true is enough to rule out a mid-air re-jump, and
+		// both are logged so the decision stays re-derivable offline.
+		const bool bLaunchedFromGround = bGrounded || !bStage4WasAirborneLastStep;
+		const bool bInWindow = ForwardObstacleCm >= 0.0f
+			&& ForwardObstacleCm <= Stage4NearWallLaunchWindowCm;
+		if (bInWindow)
+		{
+			++Stage5LaunchInWindowThisEpisode;
+		}
+		EvaluateLaunchBonusThisStep(ForwardObstacleCm, bLaunchedFromGround);
+
 		// A LAUNCH happened this step. Classified as meaningless when nothing was inside the
 		// forward path probe - i.e. the driver jumped in open ground. Recomputed from the same
 		// 300 cm sweep the scripted driver and the rollout both use, so the log can be re-derived
@@ -3341,6 +4031,23 @@ void APursuitCharEnv::AccumulateStage4Sample(float DistanceCm)
 		if (FeetAboveFloorCm >= Stage4WallHeightCm)
 		{
 			++WallCrossOverCount;
+			// Stage 5B event chain: the crossing moment is the reward trigger point the
+			// Stage 5C proposal is built around, so it is logged per occurrence with the
+			// clearance the chaser actually had at that instant.
+			if (Stage5FirstCrossOverStep < 0)
+			{
+				Stage5FirstCrossOverStep = CurrentStep;
+			}
+			Stage5EventThisStep = true;
+			UE_LOG(LogPursuitAI, Log,
+				TEXT("PursuitCharEnv: STAGE5EVENT episode=%d step=%d group=%s event=wall_cross_over clearance_height=%.0f"),
+				EpisodeIndex, CurrentStep,
+				bStage4BlockedLayout ? TEXT("must_jump") : TEXT("no_jump"),
+				FeetAboveFloorCm);
+			// Stage 5C: the crossing is the payment trigger. Decided here, in the shared hook,
+			// so an oracle run and a training run emit the same decision for the same event;
+			// ScoreStep pays whatever this hands it on THIS step.
+			EvaluateCrossBonusThisStep(FeetAboveFloorCm);
 		}
 		else
 		{
@@ -3381,6 +4088,17 @@ void APursuitCharEnv::AccumulateStage4Sample(float DistanceCm)
 	if (bStage4WasAirborneLastStep && bGrounded)
 	{
 		++LandingCountThisEpisode;
+		// Stage 5B event chain: every landing logged (per-flight duration and the
+		// landing-to-catch tail are both read from these lines offline).
+		if (Stage5FirstLandingStep < 0)
+		{
+			Stage5FirstLandingStep = CurrentStep;
+		}
+		Stage5EventThisStep = true;
+		UE_LOG(LogPursuitAI, Log,
+			TEXT("PursuitCharEnv: STAGE5EVENT episode=%d step=%d group=%s event=landed"),
+			EpisodeIndex, CurrentStep,
+			bStage4BlockedLayout ? TEXT("must_jump") : TEXT("no_jump"));
 		Stage4DistanceAtLastLandingCm = DistanceCm;
 		Stage4LandingWindowRemaining = 30;
 		Stage4LandingChaseResumed = false;
@@ -3609,6 +4327,30 @@ void APursuitCharEnv::NeutralizeStraySpectator()
 	}
 }
 
+void APursuitCharEnv::LogStage5Observation(const FBoxPoint* SensorBox)
+{
+	// Stage 5B: the chaser's full sensor reading at an event step (spawn_grounded,
+	// wall_sighted, jump_request, launched, wall_cross_over, landed, caught). This is the
+	// observation AS THE POLICY SEES IT at the exact state the event chain annotates - the
+	// input side of the discriminability question the course design has to answer. Gated on
+	// Stage5EventThisStep so it costs nothing on steps without events; the flag is cleared
+	// at the top of AccumulateValidationSample on the NEXT step.
+	if (!SensorBox || !Stage5EventThisStep)
+	{
+		return;
+	}
+	FString Dump;
+	for (int32 Index = 0; Index < SensorBox->Values.Num(); ++Index)
+	{
+		Dump += FString::Printf(TEXT("%s%.4f"), Index > 0 ? TEXT(",") : TEXT(""), SensorBox->Values[Index]);
+	}
+	UE_LOG(LogPursuitAI, Log,
+		TEXT("PursuitCharEnv: STAGE5OBS episode=%d step=%d group=%s dims=%d obs=%s"),
+		EpisodeIndex, CurrentStep,
+		bStage4BlockedLayout ? TEXT("must_jump") : TEXT("no_jump"),
+		SensorBox->Values.Num(), *Dump);
+}
+
 void APursuitCharEnv::TallyWallProbes(const FBoxPoint* SensorBox)
 {
 	if (!SensorBox || SensorBox->Values.Num() < 5)
@@ -3631,6 +4373,20 @@ void APursuitCharEnv::TallyWallProbes(const FBoxPoint* SensorBox)
 		}
 
 		++WallProbeHitsThisEpisode;
+		// Stage 5B event chain: the FIRST step the centre probe reads anything is when the
+		// wall enters the observation at all (probe reach ~800 cm). KEYED ON RANGE, not on
+		// clearance - the clearance channel saturates at 1.0 for anything shorter than the
+		// capsule centre (4A's finding), so the height channels cannot witness this moment.
+		if (bStage4WallLayout && Index == 5 + ProbeCount / 2 && Stage5FirstWallSightStep < 0)
+		{
+			Stage5FirstWallSightStep = CurrentStep;
+			Stage5EventThisStep = true;
+			UE_LOG(LogPursuitAI, Log,
+				TEXT("PursuitCharEnv: STAGE5EVENT episode=%d step=%d group=%s event=wall_sighted range=%.3f"),
+				EpisodeIndex, CurrentStep,
+				bStage4BlockedLayout ? TEXT("must_jump") : TEXT("no_jump"),
+				Range);
+		}
 		// Track the closest reading seen, so a single near miss at the edge of the cone
 		// is still visible in the summary.
 		if (Range < ClosestWallProbeThisEpisode)
@@ -3698,6 +4454,33 @@ void APursuitCharEnv::ResetEpisodeValidationState()
 	ChaseResumedAfterLandingCount = 0;
 	EvaderWallCrossCount = 0;
 	bStage4WasAirborneLastStep = false;
+
+	// Stage 5B event-chain latches: same per-episode boundary, same reason. A sight or
+	// launch step left over from the previous episode would silently shift every delay
+	// this stage measures.
+	Stage5FirstWallSightStep = -1;
+	Stage5FirstRequestStep = -1;
+	Stage5FirstLaunchStep = -1;
+	Stage5LastLaunchStep = -1;
+	Stage5FirstLandingStep = -1;
+	Stage5FirstCrossOverStep = -1;
+	Stage5CatchStep = -1;
+	Stage5EventThisStep = false;
+	// Stage 5C payment latches, on the same episode boundary as the chain latches: the C4
+	// "at most once per episode" rule is only as strong as the reset that re-arms it.
+	Stage5CrossBonusPaidThisEpisode = false;
+	Stage5CrossBonusStep = -1;
+	Stage5CrossBonusPendingReward = 0.0f;
+	Stage5CrossBonusTotalThisEpisode = 0.0f;
+	// Stage 5J variant V: reset on the same episode boundary as every other Stage 5
+	// latch. The V5 "at most once per episode" rule is only as strong as this re-arm.
+	Stage5LaunchBonusPaidThisEpisode = false;
+	Stage5LaunchBonusStep = -1;
+	Stage5LaunchBonusPendingReward = 0.0f;
+	Stage5LaunchBonusTotalThisEpisode = 0.0f;
+	Stage5LaunchCountThisEpisode = 0;
+	Stage5LaunchInWindowThisEpisode = 0;
+	Stage5FirstLaunchForwardObstacleCm = -1.0f;
 	bStage4HasBeenGrounded = false;
 	Stage4SettleStepsSkipped = 0;
 	Stage4LandingWindowRemaining = 0;
@@ -3786,6 +4569,13 @@ void APursuitCharEnv::AccumulateValidationSample(float DistanceCm)
 		FInstancedStruct WatchedObservation;
 		IAgent::Execute_Observe(ChaserAgent, WatchedObservation);
 		TallyWallProbes(ResolveTargetSensorPoint(WatchedObservation));
+		// Stage 5B: full 15D dump on event steps (watched/oracle path). One Observe per
+		// step on this path - the dump only reads what was already captured. The event
+		// flag is consumed here: everything that could set it this step (chain events in
+		// AccumulateStage4Sample, the catch latch in the watched Tick) ran BEFORE this
+		// call, and LogEpisodeValidationSummary only emits the event LINE, not a dump.
+		LogStage5Observation(ResolveTargetSensorPoint(WatchedObservation));
+		Stage5EventThisStep = false;
 	}
 
 	// Direction agreement: cos between the velocity and the bearing to the target.
@@ -3828,6 +4618,23 @@ void APursuitCharEnv::LogEpisodeValidationSummary(const TCHAR* ResultKind, float
 	const int32 Jumps = (ChaserAgent && ChaserAgent->JumpActuator)
 		? ChaserAgent->JumpActuator->GetJumpCount() - JumpCountAtEpisodeStart
 		: 0;
+
+	// Stage 5B event chain terminator: closes the per-episode chain with the terminal
+	// event and the first-step index of every stage of it, in one greppable line. On the
+	// oracle path jump_request is always -1 by construction (the reflex drives the
+	// actuator directly and never sets the request latch) - the chain starts at
+	// wall_sighted/launched there, and the STAGE4RESULT line already carries
+	// jump_intent_channel to keep the two paths from being blended.
+	if (bStage4WallLayout)
+	{
+		UE_LOG(LogPursuitAI, Log,
+			TEXT("PursuitCharEnv: STAGE5EVENT episode=%d step=%d group=%s event=%s chain[sight=%d request=%d launch=%d land=%d cross=%d catch=%d]"),
+			EpisodeIndex, CurrentStep,
+			bStage4BlockedLayout ? TEXT("must_jump") : TEXT("no_jump"),
+			ResultKind,
+			Stage5FirstWallSightStep, Stage5FirstRequestStep, Stage5FirstLaunchStep,
+			Stage5FirstLandingStep, Stage5FirstCrossOverStep, Stage5CatchStep);
+	}
 
 	UE_LOG(LogPursuitAI, Log,
 		TEXT("PursuitCharEnv: episode %d VALIDATION result=%s start_d=%.0f end_d=%.0f closest_d=%.0f ")
@@ -3903,7 +4710,22 @@ void APursuitCharEnv::LogEpisodeValidationSummary(const TCHAR* ResultKind, float
 			? EvaderAgent->JumpActuator->GetJumpCount() - EvaderJumpCountAtEpisodeStart
 			: 0;
 		UE_LOG(LogPursuitAI, Log,
-			TEXT("PursuitCharEnv: episode %d STAGE4RESULT layout=%s wall_height=%.0f jump_gate=%s jump_intent_channel=%s samples=%d jumps=%d jump_request_steps=%d airborne_steps=%d max_apex_cm=%.1f wall_cross_over=%d wall_cross_around=%d meaningless_jumps=%d landings=%d chase_resumed_after_landing=%d probe_non_clear=%d probe_blocked=%d settle_steps_skipped=%d evader_cross=%d evader_jumps=%d"),
+			TEXT("PursuitCharEnv: episode %d STAGE4RESULT layout=%s wall_height=%.0f jump_gate=%s jump_intent_channel=%s samples=%d jumps=%d jump_request_steps=%d airborne_steps=%d max_apex_cm=%.1f wall_cross_over=%d wall_cross_around=%d meaningless_jumps=%d landings=%d chase_resumed_after_landing=%d probe_non_clear=%d probe_blocked=%d settle_steps_skipped=%d evader_cross=%d evader_jumps=%d ")
+			TEXT("wall_x_offset=%.0f separation_this=%.0f chain_sight=%d chain_request=%d chain_launch=%d chain_land=%d chain_cross=%d chain_catch=%d ")
+			// Stage 5C: what the bonus actually did this episode. cross_bonus_paid is the
+			// number of payments (0 or 1 by the C4 latch), cross_bonus_total the amount, and
+			// cross_bonus_step the step index it was paid on - which MUST equal chain_cross
+			// for a paid episode, and that equality is the machine-checkable statement of
+			// "the event and its reward are the same thing on the same step".
+			// Stage 5J variant V: what the launch bonus did this episode. launch_bonus_paid is
+			// the payment count (0 or 1 by V5), launch_bonus_step the step it was decided on -
+			// which MUST equal chain_launch for a paid episode. launch_count counts every
+			// launch and launch_in_window only the ones inside the V4 window, so "paid once"
+			// can be checked against "how many times it could have been paid".
+			// launch_paid_no_cross is the KNOWN HOLE made countable: it is 1 exactly when the
+			// episode took the +2 and still never crossed the wall.
+			TEXT("cross_bonus_paid=%d cross_bonus_total=%.3f cross_bonus_step=%d ")
+			TEXT("launch_bonus_paid=%d launch_bonus_total=%.3f launch_bonus_step=%d launch_count=%d launch_in_window=%d first_launch_obstacle_cm=%.1f launch_paid_no_cross=%d"),
 			EpisodeIndex,
 			bStage4BlockedLayout ? TEXT("must_jump") : TEXT("no_jump"),
 			Stage4WallHeightCm,
@@ -3914,7 +4736,19 @@ void APursuitCharEnv::LogEpisodeValidationSummary(const TCHAR* ResultKind, float
 			WallCrossOverCount, WallCrossAroundCount, MeaninglessJumpCount,
 			LandingCountThisEpisode, ChaseResumedAfterLandingCount,
 			WallProbeHitsThisEpisode, HopBlockedReadingsThisEpisode, Stage4SettleStepsSkipped,
-			EvaderWallCrossCount, EvaderJumps);
+			EvaderWallCrossCount, EvaderJumps,
+			// Stage 5B: the layout actually used this episode + the first-step index of each
+			// chain stage (appended at the END of the line; every existing field keeps its
+			// position, so the 4A parser's named-field reads are unchanged).
+			Stage4WallOffsetThisEpisodeCm, Stage4SeparationThisEpisodeCm,
+			Stage5FirstWallSightStep, Stage5FirstRequestStep, Stage5FirstLaunchStep,
+			Stage5FirstLandingStep, Stage5FirstCrossOverStep, Stage5CatchStep,
+			Stage5CrossBonusPaidThisEpisode ? 1 : 0, Stage5CrossBonusTotalThisEpisode,
+			Stage5CrossBonusStep,
+			Stage5LaunchBonusPaidThisEpisode ? 1 : 0, Stage5LaunchBonusTotalThisEpisode,
+			Stage5LaunchBonusStep, Stage5LaunchCountThisEpisode, Stage5LaunchInWindowThisEpisode,
+			Stage5FirstLaunchForwardObstacleCm,
+			(Stage5LaunchBonusPaidThisEpisode && WallCrossOverCount == 0) ? 1 : 0);
 	}
 
 	// Flush the log NOW (Stage 3B). Reason, measured on the Stage 3A zero-shot run: the

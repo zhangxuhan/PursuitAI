@@ -657,6 +657,45 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Pursuit|Arena")
 	float Stage4ClearShiftCm = -600.0f;
 
+	/** Stage 5D diagnostic only: true iff -PursuitClearShift= was passed on the command line.
+	 * Disclosed in the per-episode layout log so a reader can tell the baked level value
+	 * (override=off) from an explicit runtime override (override=on). Never read for behaviour. */
+	bool bPursuitClearShiftOverridden = false;
+
+	/** Stage 5E diagnostic only: true iff -PursuitDisableWall was passed. When set, the Stage-4
+	 * interior wall actor is NOT spawned and its collision / probe discs are omitted, so the
+	 * no_jump (and must_jump) layout runs wall-free. Disclosed via wall_disabled= in the layout log.
+	 * Never read for behaviour except skipping BuildStage4Wall. Default behaviour unchanged unless flag passed. */
+	bool bPursuitDisableWall = false;
+	/** Stage 5E diagnostic only: true iff -PursuitSeparation= was passed; overrides the per-episode
+	 * randomized spawn separation with a fixed value (cm). Disclosed via sep_override= in the layout log. */
+	bool bPursuitSeparationOverridden = false;
+	/** Stage 5E diagnostic only: true iff -PursuitEpisodeSeconds= was passed; overrides EpisodeSeconds. */
+	bool bPursuitEpisodeSecondsOverridden = false;
+	/** Stage 5E diagnostic only: true iff -PursuitEvaderSpeedRatio= was passed; overrides EvaderSpeedRatio. */
+	bool bPursuitEvaderRatioOverridden = false;
+	/** Stage 5E diagnostic only: number of leading episodes (0 = off) for which Step_Implementation
+	 * logs the exact (obs -> action) pair + chaser/evader XY to the -abslog, for key-trajectory comparison.
+	 * Bounds-gated 0..20; default off. Never read for behaviour. */
+	int32 PursuitDumpObsEpisodes = 0;
+
+	/** Stage 5F: independent course fork. A level bakes bPursuitCourseFork=true (or it is forced
+	 * via -PursuitCourseFork) so the no_jump group spawns with NO interior wall (component collision
+	 * + visibility off) and NO clear-shift avoidance disc (Shift=0); must_jump keeps the 70 cm wall.
+	 * CrossBonus already refuses no_jump via the group gate, so no_jump pays 0. Frozen 5B/5C levels
+	 * do NOT set it, so they are unchanged. NOT a training change - pre-training acceptance only. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Pursuit|Arena")
+	bool bPursuitCourseFork = false;
+	/** Stage 5F: per-episode "is the interior wall actually present AND colliding this episode".
+	 * Driven by bPursuitCourseFork + group parity; disclosed via wall_actual= in the layout log. */
+	bool bStage4WallActiveThisEpisode = true;
+	/** Stage 5F Task 1: explicit fixed spawn coords "cx,cy,ex,ey" (cm). When set, PlaceStage4SpawnPair
+	 * uses these absolute coords (bypassing the parity translation + clear-shift) so a wall-on / wall-off
+	 * comparison uses IDENTICAL spawn. Default off; only -PursuitFixedSpawn changes it. */
+	bool bPursuitFixedSpawn = false;
+	FVector2D PursuitFixedChaser = FVector2D::ZeroVector;
+	FVector2D PursuitFixedEvader = FVector2D::ZeroVector;
+
 	/**
 	 * Spawn facing (yaw, degrees) of the chaser in BOTH Stage 4 layouts. Reuses the Stage 3
 	 * field and its reasoning verbatim: the subject of this stage is the WALL, so "where is
@@ -680,6 +719,250 @@ public:
 	/** True when the CURRENT episode uses the must-jump layout (episode parity 0). Logged per episode. */
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Pursuit|Arena")
 	bool bStage4BlockedLayout = false;
+
+	// --- Stage 5B course randomisation ---------------------------------------------------
+	//
+	// Both default to 0 = "exactly the legacy geometry": every existing level keeps its
+	// bit-identical behaviour unless the level itself sets these. Sampled per episode in
+	// PlaceStage4SpawnPair from the episode-keyed DriveRng (seed + episode index), so a
+	// run's layout sequence is reproducible from the run seed alone, and the resolved
+	// values are logged on the per-episode STAGE4 line beside the spec they modified.
+
+	/** Per-episode wall X offset sampled from [-this, +this], cm. 0 keeps the wall on the env origin. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Pursuit|Arena")
+	float Stage4WallJitterCm = 0.0f;
+
+	/** Per-episode spawn separation = Stage4SpawnSeparationCm + U(-this, +this), cm. 0 keeps it fixed. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Pursuit|Arena")
+	float Stage4SpawnSepJitterCm = 0.0f;
+
+	// --- Stage 5C: the one-shot "effective wall crossing" bonus --------------------------
+	//
+	// The ONLY new reward term Stage 5C adds, and the single variable under test. It exists
+	// because Stage 5B measured that the jump decision and the reward it eventually earns are
+	// separated by 280-390 training steps even from point-blank range (gamma^(280..390) ~ 2-3.5%)
+	// and by ~900 steps at the oracle's own spacing (gamma ~1e-4): the return that reaches the
+	// launch step is not the catch return, it is whatever crosses the wall plane. So this pays
+	// the crossing itself, once, at the crossing step.
+	//
+	// Default 0.0 = OFF, and that default is load-bearing: every level baked before Stage 5C
+	// (4A, 4C, 5A, and the 5B acceptance course) must score EXACTLY as it did before, and a
+	// non-zero default would silently rewrite all of their reward histories. Only the Stage 5C
+	// level copy sets it.
+	//
+	// Payment is gated four ways, all logged per episode, because "the bonus exists" and "the
+	// bonus was paid for the right reason" are different claims:
+	//   C1 group gate  - must_jump episodes only. no_jump must never see it, or the control
+	//                    group stops being a control group.
+	//   C2 gate on     - bEnableAgentJump, so a jump-disabled run cannot farm it.
+	//   C3 real event  - the engine's own wall_cross_over classification (feet >= wall top at
+	//                    the instant the wall plane is crossed), not a proximity guess.
+	//   C4 latch       - the 0->1 transition of WallCrossOverCount, i.e. at most once per
+	//                    episode. Crossing back and forth pays nothing further, so the bonus
+	//                    cannot be farmed by hopping over the same wall repeatedly.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Pursuit|Arena")
+	float Stage4CrossBonus = 0.0f;
+
+	/** Wall X offset and separation actually in force THIS episode (logged per episode). */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Pursuit|Arena")
+	float Stage4WallOffsetThisEpisodeCm = 0.0f;
+
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Pursuit|Arena")
+	float Stage4SeparationThisEpisodeCm = 0.0f;
+
+	/** Index range in RigObstacleDiscs owned by the wall's spawn-avoidance row; offset with the wall. */
+	int32 Stage4WallDiscFirst = INDEX_NONE;
+	int32 Stage4WallDiscLast = INDEX_NONE;
+
+	// --- Stage 5B event-chain latches ------------------------------------------------------
+	//
+	// LOGGING ONLY. Per-episode FIRST-step index of each event in the jump chain, in the
+	// shared CurrentStep domain (the watched and the training path both count it). 4B had
+	// to derive the request-to-catch lag from constants because the log carried no step
+	// index; these latches are that logging gap closed, and the per-episode STAGE4RESULT
+	// line carries them beside the aggregates they annotate.
+
+	int32 Stage5FirstWallSightStep = -1;
+	int32 Stage5FirstRequestStep = -1;
+	int32 Stage5FirstLaunchStep = -1;
+	int32 Stage5LastLaunchStep = -1;
+	int32 Stage5FirstLandingStep = -1;
+	int32 Stage5FirstCrossOverStep = -1;
+	int32 Stage5CatchStep = -1;
+
+	/** True when any Stage 5 event fired THIS step: gates the full 15D observation dump. */
+	bool Stage5EventThisStep = false;
+
+	// --- Stage 5C cross-bonus payment state -----------------------------------------------
+	//
+	// The bonus is DECIDED in the shared per-step hook (so both the oracle path and the
+	// training path emit the same payment evidence) and PAID by ScoreStep on the training
+	// path only. The pending amount is the hand-off between those two halves, and it is a
+	// plain float rather than a bool so the log can say how much was handed over:
+	// "an event happened" and "that event entered the return the trainer optimised" are two
+	// claims and Stage 5C has to prove they are the same event on the same step.
+
+	/** True once the episode's first effective crossing has been paid (C4 latch). */
+	bool Stage5CrossBonusPaidThisEpisode = false;
+
+	/** Step index at which the payment was decided; -1 when never paid. */
+	int32 Stage5CrossBonusStep = -1;
+
+	/** Bonus amount handed to ScoreStep for THIS step; consumed (zeroed) by ScoreStep. */
+	float Stage5CrossBonusPendingReward = 0.0f;
+
+	/** Total bonus paid this episode (0.0 or Stage4CrossBonus, given the C4 latch). */
+	float Stage5CrossBonusTotalThisEpisode = 0.0f;
+
+	/**
+	 * Decide whether the episode's first effective wall crossing pays Stage4CrossBonus.
+	 * Called from the crossing classifier, i.e. from the one hook BOTH paths share, so the
+	 * oracle run and the training run produce the same payment line for the same event.
+	 * Logs the decision either way, with the gate that refused it when it refuses.
+	 */
+	void EvaluateCrossBonusThisStep(float ClearanceCm);
+
+
+	// --- Stage 5K: the DECISION CADENCE (decisions per simulated second) --------------
+	//
+	// What Stage 5I measured, and why this exists:
+	//   * one Schola decision == one UE tick == one physics frame. MEASURED, not assumed:
+	//     consecutive event-bearing steps differ by exactly 1 in UE's own "[frame]" log
+	//     stamp (logs/stage5k/*_cadence_summary.json -> tick_identity).
+	//   * the trainer therefore runs at 479-588 decisions per SIMULATED second on the
+	//     training path and 758-970 on the eval path: 1.0-2.1 simulated milliseconds per
+	//     decision, unfixed, and different between training and inference.
+	//   * consequence: request -> wall crossing costs 1286-1908 DECISIONS and a single hop
+	//     is airborne for 420-650 of them, so a bonus posted on the crossing step reaches
+	//     the launch decision attenuated by gamma^420 ~ 0.015 at best.
+	//
+	// This is the mechanism the brief asks for: hold ONE action for DecisionInterval
+	// physics updates and ask the policy for the next action only every DecisionInterval-th
+	// update. It touches NO reward coefficient, NO EpisodeSeconds, NO speed, gravity or
+	// jump height: the simulated-second wall and every per-second rate are unchanged, only
+	// the number of decisions inside that second changes.
+	//
+	// Four requirements that are each a bug this would otherwise ship:
+	//   1. the held action is RE-APPLIED on every skipped update - AddMovementInput is
+	//      consumed by the movement component every tick, so an action that is not
+	//      re-applied is an action that silently stops the chaser;
+	//   2. the EVADER is advanced on skipped updates too, otherwise the prey freezes for
+	//      N-1 of every N updates and the pursuit stops being a pursuit;
+	//   3. the skipped updates' simulated time is BANKED and added to the next decision's
+	//      Dt, otherwise the EpisodeSeconds wall silently stretches by a factor of N;
+	//   4. the phase counter resets at BeginEpisode so decisions align with episodes.
+	//
+	// Default 1 reproduces every earlier stage update-for-update.
+
+	/** Physics updates per policy decision. 1 = the historical one-decision-per-update. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Pursuit|Training", meta = (ClampMin = "1"))
+	int32 DecisionInterval = 1;
+
+	/** Updates since the last decision. Reset every episode; 0 == this update decides. */
+	int32 Stage5KFramePhase = 0;
+
+	/** Simulated seconds banked from the updates skipped since the last decision. */
+	float Stage5KHeldDeltaSeconds = 0.0f;
+
+	/** Total simulated seconds banked this episode (reported, never used for behaviour). */
+	float Stage5KHeldSecondsTotal = 0.0f;
+
+	/** UE updates observed this episode. Reported so updates/decision is measurable. */
+	int32 Stage5KUpdateCountThisEpisode = 0;
+
+	/** The action currently in force; re-applied on every skipped update. */
+	FInstancedStruct Stage5KHeldAction;
+
+	/** False until this episode's first action has arrived. */
+	bool bStage5KHasHeldAction = false;
+
+	/**
+	 * Run one skipped update: re-apply the held action, advance the evader, bank the time.
+	 * Same two calls, in the same order, as a decision update makes - a skipped update is
+	 * not a different simulation, it is the same simulation with the previous decision
+	 * still in force.
+	 */
+	void AdvanceHeldAction(float DeltaSeconds);
+
+	// --- Stage 5J variant V: the near-wall LAUNCH bonus --------------------------------
+	//
+	// What Stage 5I MEASURED, and why this exists:
+	//   * training period (random sampling, std=1.08): must_jump crossed the wall in 6/7
+	//     episodes and the one-shot +2.0 was PAID on 6 of them, on the crossing step
+	//     itself (cross_bonus_step == chain_cross). Wiring was NOT the problem.
+	//   * read out every Deterministic Agent roll: 0 jump requests, 0 launches, 0
+	//     crossings over 50 episodes - identical to the frozen rep3 baseline. Root cause,
+	//     quantified: request -> cross costs 1111-1908 steps and a single hop is airborne
+	//     for 420-650 of them, so a reward posted on the CROSSING step reaches the launch
+	//     decision attenuated by gamma^420 ~ 0.015 at best.
+	//   * V therefore moves the payment from the crossing step to the LAUNCH step - the
+	//     decision being shaped - and leaves getting OVER the wall to the task reward.
+	//
+	// Payment gates, every one named in the log, because "the bonus was not paid" must
+	// never be indistinguishable from "the bonus was never wired up":
+	//   V1 group    - must_jump only. no_jump has no interior wall in the fork layout,
+	//                 but the arena boundary ring IS within 250 cm of a chaser that runs
+	//                 to it, so without this gate the control group becomes farmable.
+	//   V2 jump     - bEnableAgentJump, so a jump-disabled run cannot earn it.
+	//   V3 ground   - the launch must start from the ground (no mid-air re-jump).
+	//   V4 window   - a forward blocker must be <= Stage4NearWallLaunchWindowCm away.
+	//                 This is the entire speculative content of V: it buys the launch
+	//                 only where a wall is close enough to be the reason for it.
+	//   V5 latch    - at most ONE payment per episode; re-launching inside the window
+	//                 pays nothing more, so hopping in place cannot accumulate.
+	//
+	// KNOWN HOLE, counted rather than hidden: NOTHING here requires the hop to actually
+	// clear the wall. A policy can take the +2 and still never cross. That is exactly
+	// what the per-episode launch_paid_no_cross flag records, and Stage 5J reports it as
+	// a NUMBER before any training is authorised (acceptance gate A5).
+
+	/** Amount paid for the episode's first qualifying near-wall launch. 0.0 = OFF. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Pursuit|Arena")
+	float Stage4NearWallLaunchBonus = 0.0f;
+
+	/** Forward-obstacle distance (cm) at or below which a grounded launch qualifies. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Pursuit|Arena")
+	float Stage4NearWallLaunchWindowCm = 250.0f;
+
+	/** True once the episode's first qualifying launch has been paid (V5 latch). */
+	bool Stage5LaunchBonusPaidThisEpisode = false;
+
+	/** Step index at which the launch payment was decided; -1 when never paid. */
+	int32 Stage5LaunchBonusStep = -1;
+
+	/** Amount handed to ScoreStep for THIS step; consumed (zeroed) by ScoreStep. */
+	float Stage5LaunchBonusPendingReward = 0.0f;
+
+	/** Total launch bonus paid this episode (0.0 or the coefficient, given V5). */
+	float Stage5LaunchBonusTotalThisEpisode = 0.0f;
+
+	/** Launches observed this episode (every one, inside the window or not). */
+	int32 Stage5LaunchCountThisEpisode = 0;
+
+	/** Launches this episode whose forward blocker was inside the window window (paid or not). */
+	int32 Stage5LaunchInWindowThisEpisode = 0;
+
+	/** Forward-obstacle distance measured at this episode's FIRST launch, cm; -1 = never launched. */
+	float Stage5FirstLaunchForwardObstacleCm = -1.0f;
+
+	/**
+	 * Decide whether this step's launch pays Stage4NearWallLaunchBonus.
+	 * Called from the launch detector - the one hook BOTH paths share - so an oracle run
+	 * and a training run emit the same decision line for the same launch.
+	 */
+	void EvaluateLaunchBonusThisStep(float ForwardObstacleCm, bool bLaunchedFromGround);
+
+	/**
+	 * Sphere-swept distance to the first blocker straight ahead of the chaser, cm.
+	 * Deliberately the same geometry and range as the 0-degree observation probe (34 cm
+	 * sphere, capsule-centre height, actors ignored, 800 cm range) so the V4 window speaks
+	 * the SAME physical quantity the policy can observe. Returns -1.0f when nothing is
+	 * ahead within the probe range.
+	 */
+	float MeasureForwardObstacleCm() const;
+
+	/** Dump the chaser's full sensor reading at a Stage 5 event step (logging only). */
+	void LogStage5Observation(const struct FBoxPoint* SensorBox);
 
 	// --- Stage 4A per-episode jump / crossing diagnostics -------------------------------
 	//

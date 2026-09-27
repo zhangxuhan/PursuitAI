@@ -2,6 +2,10 @@
 
 #include "PursuitTargetSensor.h"
 
+// Stage 5M-A: the speed trace below logs into the project category so the interval
+// measurement lands in the same abslog as the cadence and reward markers.
+#include "PursuitAI.h"
+
 #include "Engine/World.h"
 #include "GameFramework/Pawn.h"
 
@@ -99,6 +103,8 @@ void UPursuitTargetSensor::CollectObservations_Implementation(FInstancedStruct& 
 	{
 		// A sensor with nothing to sense still has to emit a well-formed point, or the
 		// observation tensor silently mismatches the space the policy was trained on.
+		Observation.Values.Init(0.0f, NumSensorDimensions);
+		LastObsValues = Observation.Values;
 		OutObservations.InitializeAs<FBoxPoint>(Observation);
 		return;
 	}
@@ -155,6 +161,7 @@ void UPursuitTargetSensor::CollectObservations_Implementation(FInstancedStruct& 
 		Observation.Values[ClearanceBase + Probe] = Clearance;
 	}
 
+	LastObsValues = Observation.Values;
 	OutObservations.InitializeAs<FBoxPoint>(Observation);
 }
 
@@ -164,6 +171,21 @@ void UPursuitTargetSensor::ResetVelocityHistory()
 	// of several thousand cm/s. Drop the history; the next collection starts a new pair.
 	bHasVelocityHistory = false;
 	LastTargetLocation = FVector::ZeroVector;
+
+	// Stage 5M-A: the time baseline has to go too, and for the same reason. Keeping it
+	// would let the first collection of an episode measure its displacement against the
+	// last collection of the PREVIOUS episode - a full-map spawn teleport over whatever
+	// time the reset happened to take, which is exactly the shape of a false "the prey
+	// is sprinting" reading. Dropping both sides at once keeps the pair consistent.
+	bHasObservationTime = false;
+	LastObservationTimeSeconds = 0.0f;
+
+	if (FParse::Param(FCommandLine::Get(), TEXT("PursuitStage5MSpeedTrace")))
+	{
+		UE_LOG(LogPursuitAI, Log,
+			TEXT("STAGE5MSPEED owner=%s event=reset disp_cm=0.000 acc_s=0.000000 frame_dt_s=0.000000 raw_cm_s=0.000 obs4=0.0000"),
+			*GetNameSafe(GetOwner()));
+	}
 }
 
 void UPursuitTargetSensor::CollectWallProbe(const APawn* Owner, float AngleDegrees,
@@ -267,21 +289,57 @@ void UPursuitTargetSensor::CollectWallProbe(const APawn* Owner, float AngleDegre
 	OutClearance = FMath::Clamp(1.0f - BlockerTopHeight / HeightScale, 0.0f, 1.0f);
 }
 
-float UPursuitTargetSensor::CollectTargetSpeed(const FVector& TargetLocation) const
+float UPursuitTargetSensor::CollectTargetSpeed(const FVector& TargetLocation)
 {
-	const AActor* Target = TargetActor.Get();
-	if (!bHasVelocityHistory || !Target)
-	{
-		return 0.0f;
-	}
+	// Stage 5M-A diagnostic trace, off unless asked for on the command line. It prints
+	// the four numbers that decide this channel - raw displacement, the accumulated
+	// simulated time it is divided by, the un-clamped cm/s, and the value the policy
+	// actually receives - so "the reading is saturated" can be traced to a numerator or
+	// a denominator instead of being guessed at from the observation dump.
+	static const bool bTraceSpeed = FParse::Param(FCommandLine::Get(), TEXT("PursuitStage5MSpeedTrace"));
 
 	const UWorld* World = GetWorld();
-	const float DeltaSeconds = World ? World->GetDeltaSeconds() : 0.0f;
-	if (DeltaSeconds <= KINDA_SMALL_NUMBER)
+	const float NowSeconds = World ? World->GetTimeSeconds() : -1.0f;
+	const float FrameDeltaSeconds = World ? World->GetDeltaSeconds() : 0.0f;
+
+	// Elapsed = how much simulated time really passed since the previous collection.
+	// No baseline (first collection ever, or the first after a reset) means "unknown",
+	// not "one frame": reporting 0.0 there is the same contract ResetVelocityHistory
+	// already guarantees for the displacement side.
+	const bool bHaveElapsed = bHasObservationTime && NowSeconds >= 0.0f;
+	const float ElapsedSeconds = bHaveElapsed ? (NowSeconds - LastObservationTimeSeconds) : 0.0f;
+
+	// Re-base unconditionally, including on the paths that return early below, so the
+	// next collection measures from THIS one and never inherits a stale interval.
+	if (NowSeconds >= 0.0f)
 	{
+		LastObservationTimeSeconds = NowSeconds;
+		bHasObservationTime = true;
+	}
+
+	const AActor* Target = TargetActor.Get();
+	if (!bHasVelocityHistory || !Target || ElapsedSeconds <= KINDA_SMALL_NUMBER)
+	{
+		if (bTraceSpeed)
+		{
+			UE_LOG(LogPursuitAI, Log,
+				TEXT("STAGE5MSPEED owner=%s event=no_history disp_cm=0.000 acc_s=%.6f frame_dt_s=%.6f raw_cm_s=0.000 obs4=0.0000"),
+				*GetNameSafe(GetOwner()), ElapsedSeconds, FrameDeltaSeconds);
+		}
 		return 0.0f;
 	}
 
 	const float Centimetres = static_cast<float>(FVector::Dist(TargetLocation, LastTargetLocation));
-	return NormaliseSpeed(Centimetres / DeltaSeconds, SpeedScaleCm);
+	const float CentimetresPerSecond = Centimetres / ElapsedSeconds;
+	const float Reading = NormaliseSpeed(CentimetresPerSecond, SpeedScaleCm);
+
+	if (bTraceSpeed)
+	{
+		UE_LOG(LogPursuitAI, Log,
+			TEXT("STAGE5MSPEED owner=%s event=sample disp_cm=%.3f acc_s=%.6f frame_dt_s=%.6f raw_cm_s=%.3f obs4=%.4f"),
+			*GetNameSafe(GetOwner()), Centimetres, ElapsedSeconds, FrameDeltaSeconds,
+			CentimetresPerSecond, Reading);
+	}
+
+	return Reading;
 }

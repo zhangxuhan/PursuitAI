@@ -86,6 +86,14 @@ public:
 	TWeakObjectPtr<AActor> TargetActor;
 
 	/**
+	 * Stage 5E diagnostic only: the fifteen observation values most recently produced by
+	 * CollectObservations_Implementation. The env reads this from Step_Implementation to log
+	 * the exact (obs -> action) pair the policy saw, for the key-trajectory comparison. It is
+	 * a plain cache, never read for behaviour, and is only meaningful when -PursuitDumpObs is set.
+	 */
+	TArray<float> LastObsValues;
+
+	/**
 	 * Distance in cm that maps to a sensor reading of exactly 1.0.
 	 *
 	 * Lowered 2400 -> 600 on 2026-09-22 (v3.6_facefix), after measuring the dynamic
@@ -138,8 +146,30 @@ private:
 
 	bool bHasVelocityHistory = false;
 
+	/**
+	 * Stage 5M-A: world time (simulated seconds) at the previous collection.
+	 *
+	 * The differenced target speed is displacement / ELAPSED TIME, and the elapsed time
+	 * is not knowable from the frame rate: with Stage 5K's DecisionInterval = N the
+	 * environment lets N-1 updates pass between two observations, so one observation
+	 * spans N updates of simulated time while `World->GetDeltaSeconds()` still reports
+	 * ONE update. Dividing by that single delta inflated the reading N-fold and then
+	 * Clamp() pinned it at 1.0 - measured in Stage 5L: obs[4] saturation went 3.7%
+	 * (N=1) -> 80.9% (N=4), i.e. the channel collapsed to a two-valued {0, 1}.
+	 *
+	 * The fix is to measure the interval instead of assuming it. World time advances by
+	 * every update's delta whether or not that update produced an observation, so the
+	 * difference of two readings is the true accumulated simulated time - correct for
+	 * N=1, for N=4, for a first step after a reset (no baseline -> 0.0), and for any
+	 * irregular interval, none of which a hard-coded "/ N" would survive.
+	 */
+	float LastObservationTimeSeconds = 0.0f;
+
+	/** Whether LastObservationTimeSeconds holds a baseline taken since the last reset. */
+	bool bHasObservationTime = false;
+
 	/** One speed reading: cm/s of the target between this collection and the last one. */
-	float CollectTargetSpeed(const FVector& TargetLocation) const;
+	float CollectTargetSpeed(const FVector& TargetLocation);
 
 	/**
 	 * One wall probe: sphere-swept ray from the owner along AngleDegrees (owner-relative
